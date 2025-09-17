@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8"/>
+<title>Admin – site_data</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body{font-family:system-ui,Arial,sans-serif;margin:24px;background:#f8fafc}
+  .row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  input,textarea,button{font:inherit;padding:8px;border:1px solid #d0d7de;border-radius:8px}
+  textarea{width:100%;min-height:340px;tab-size:2;font-family:monospace;}
+  button{cursor:pointer;background-color:#f6f8fa;font-weight:600;}
+  button:hover{background-color:#f0f2f4;}
+  #save {background-color:#2da44e;color:white;}
+  #save:hover {background-color:#2c974b;}
+  .ok{color:#0a0;font-weight:bold;}
+  .err{color:#b00;font-weight:bold;white-space:pre-wrap}
+  .wrap{max-width:980px;margin:auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px}
+  label{font-weight:600;display:flex;align-items:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>Admin – site_data</h2>
+
+  <div class="row">
+    <label>Key:&nbsp;<input id="key" value="grammar_registry" style="width:200px;"/></label>
+    <label>Admin Key:&nbsp;<input id="adminKey" type="password" placeholder="ADMIN_KEY" /></label>
+    <label>Updated by:&nbsp;<input id="email" placeholder="email" /></label>
+    <button id="load">Load</button>
+    <button id="beauty">Beautify</button>
+    <button id="save">Save</button>
+  </div>
+
+  <textarea id="json" placeholder='Nhấn "Load" để tải dữ liệu JSON, hoặc dán JSON vào đây rồi nhấn "Save".'></textarea>
+  <div id="msg" style="margin-top:8px;"></div>
+</div>
+
+<script>
+const $ = (id)=>document.getElementById(id);
+const show = (el, text, cls)=>{ el.className=cls; el.textContent=text; };
+
+const API_BASE = '/api/site-data';
+
+$("load").onclick = async () => {
+  const k = $("key").value.trim();
+  if (!k) {
+      show($('msg'), 'Key không được để trống.', 'err');
+      return;
+  }
+  show($('msg'), 'Loading...', '');
+  try {
+    const r = await fetch(`${API_BASE}/${encodeURIComponent(k)}`);
+    if (!r.ok) throw new Error(`Server returned ${r.status}`);
+    const j = await r.json();
+    $('json').value = JSON.stringify(j ?? {}, null, 2);
+    show($('msg'), 'Loaded ✓', 'ok');
+  } catch(e) {
+    show($('msg'), 'Load lỗi: ' + e.message, 'err');
+    $('json').value = '';
+  }
+};
+
+$("beauty").onclick = () => {
+  try {
+    const obj = JSON.parse($('json').value || '{}');
+    $('json').value = JSON.stringify(obj, null, 2);
+    show($('msg'), 'Formatted ✓', 'ok');
+  } catch(e) {
+    show($('msg'), 'JSON lỗi: ' + e.message, 'err');
+  }
+};
+
+$("save").onclick = async () => {
+  const k = $("key").value.trim();
+  const adminKey = $("adminKey").value.trim();
+  const email = $("email").value.trim();
+  
+  if (!k || !adminKey) {
+      show($('msg'), 'Key và Admin Key không được để trống.', 'err');
+      return;
+  }
+  
+  let data;
+  try {
+    data = JSON.parse($('json').value);
+  } catch (e) {
+    show($('msg'), 'Save lỗi: JSON không hợp lệ. ' + e.message, 'err');
+    return;
+  }
+  
+  show($('msg'), 'Saving...', '');
+
+  try {
+    const r = await fetch(`${API_BASE}/${encodeURIComponent(k)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-key': adminKey
+      },
+      body: JSON.stringify({ data, updated_by: email })
+    });
+
+    if (!r.ok) {
+      const e = await r.json().catch(()=> ({ error: `HTTP ${r.status} ${r.statusText}` }));
+      throw new Error(e.error || r.statusText);
+    }
+    show($('msg'), 'Saved ✓', 'ok');
+  } catch(e) {
+    show($('msg'), 'Save lỗi: ' + e.message, 'err');
+  }
+};
+</script>
+</body>
+</html>
