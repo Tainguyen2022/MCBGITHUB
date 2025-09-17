@@ -1,0 +1,20 @@
+import { WritingSeed } from '../../types';
+
+type WritingSeedContent = Pick<WritingSeed, 'sample_answer_en' | 'sample_answer_vi' | 'sample_outline_en' | 'sample_outline_vi' | 'vocabulary' | 'practice'>;
+
+export const ieltsTask1MapContent: Record<string, WritingSeedContent> = {
+    'IELTS-T1-MAP-01': {
+        sample_answer_en: "The two diagrams illustrate the layout of a university sports centre in 2010 and its current state.\n\nOverall, the sports centre has undergone a significant expansion and modernization, with the addition of several new facilities and the enlargement of existing areas. The outdoor courts have been removed to make way for these new developments.\n\nThe most prominent change is the construction of a large building extension on the eastern side of the centre, where the outdoor courts were previously located. This new wing houses a 25-metre swimming pool, a dance studio, and an additional changing room. To the west of the main building, a new sports hall has been built, also occupying a part of the former outdoor court area.\n\nInside the original building, the central gym has been considerably enlarged by removing the changing rooms that were formerly on its left and right sides. The reception area and seating have remained in the same location at the front entrance, but a new café has been added to the left of the reception. The changing rooms have been relocated to the new extension and the new sports hall.",
+        sample_answer_vi: "Hai sơ đồ minh họa bố cục của một trung tâm thể thao đại học vào năm 2010 và tình trạng hiện tại của nó.\n\nNhìn chung, trung tâm thể thao đã trải qua một sự mở rộng và hiện đại hóa đáng kể, với việc bổ sung một số cơ sở vật chất mới và mở rộng các khu vực hiện có. Các sân ngoài trời đã được dỡ bỏ để nhường chỗ cho những phát triển mới này.\n\nThay đổi nổi bật nhất là việc xây dựng một phần tòa nhà mở rộng lớn ở phía đông của trung tâm, nơi trước đây là các sân ngoài trời. Cánh nhà mới này có một bể bơi dài 25 mét, một phòng tập nhảy và một phòng thay đồ bổ sung. Về phía tây của tòa nhà chính, một nhà thi đấu thể thao mới đã được xây dựng, cũng chiếm một phần của khu vực sân ngoài trời trước đây.\n\nBên trong tòa nhà ban đầu, phòng gym trung tâm đã được mở rộng đáng kể bằng cách dỡ bỏ các phòng thay đồ trước đây nằm ở bên trái và bên phải của nó. Khu vực lễ tân và ghế ngồi vẫn ở vị trí cũ tại lối vào chính, nhưng một quán cà phê mới đã được thêm vào bên trái của khu vực lễ tân. Các phòng thay đồ đã được di dời đến phần mở rộng mới và nhà thi đấu thể thao mới.",
+        sample_outline_en: `1. Intro: Paraphrase the prompt (layout of a sports centre in 2010 vs. now).\n2. Overview: State the main changes - significant expansion and modernization, with new facilities replacing the old outdoor courts.\n3. Body 1: Describe the major external changes, focusing on the new extension on the east (pool, dance studio) and the new sports hall on the west.\n4. Body 2: Describe the internal changes to the original building (enlarged gym, new café, relocation of changing rooms).`,
+        sample_outline_vi: `1. Mở bài: Diễn giải lại đề bài (bố cục trung tâm thể thao năm 2010 so với hiện tại).\n2. Tổng quan: Nêu những thay đổi chính - mở rộng và hiện đại hóa đáng kể, với các cơ sở vật chất mới thay thế các sân ngoài trời cũ.\n3. Thân bài 1: Mô tả những thay đổi lớn bên ngoài, tập trung vào phần mở rộng mới ở phía đông (bể bơi, phòng tập nhảy) và nhà thi đấu mới ở phía tây.\n4. Thân bài 2: Mô tả những thay đổi bên trong tòa nhà ban đầu (phòng gym được mở rộng, quán cà phê mới, di dời phòng thay đồ).`,
+        vocabulary: [
+            { word: 'layout', ipa: '/ˈleɪaʊt/', pos: 'n.', vi: 'bố cục, sơ đồ' },
+            { word: 'undergone', ipa: '/ˌʌndəˈɡɒn/', pos: 'v.', vi: 'trải qua' },
+            { word: 'expansion', ipa: '/ɪkˈspænʃn/', pos: 'n.', vi: 'sự mở rộng' },
+            { word: 'prominent', ipa: '/ˈprɒmɪnənt/', pos: 'adj.', vi: 'nổi bật, đáng chú ý' },
+            { word: 'relocated', ipa: '/ˌriːləʊˈkeɪtɪd/', pos: 'v.', vi: 'được di dời' },
+            { word: 'enlarged', ipa: '/ɪnˈlɑːdʒd/', pos: 'v.', vi: 'được mở rộng' }
+        ]
+    }
+};
