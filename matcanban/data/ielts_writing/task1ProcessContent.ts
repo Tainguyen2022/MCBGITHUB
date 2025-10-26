@@ -1,0 +1,20 @@
+import { WritingSeed } from '../../types';
+
+type WritingSeedContent = Pick<WritingSeed, 'sample_answer_en' | 'sample_answer_vi' | 'sample_outline_en' | 'sample_outline_vi' | 'vocabulary' | 'practice'>;
+
+export const ieltsTask1ProcessContent: Record<string, WritingSeedContent> = {
+    'IELTS-T1-PRO-01': {
+        sample_answer_en: "The diagram illustrates the various stages involved in the production of smoked fish.\n\nOverall, the process is a linear one, consisting of several distinct steps, beginning with catching the fish and culminating in the final product being dispatched to shops. The main stages can be categorized into preparation, treatment, and distribution.\n\nThe process commences when fish are caught at sea and transported to a port. In the initial preparation phase, the fish are cleaned, and their guts are removed. Following this, the fish are soaked in a brine solution, which is a mixture of salt and water, for a period of 30 minutes.\n\nThe subsequent treatment phase begins with the fish being smoked. They are hung vertically and exposed to wood smoke for another 30 minutes. After smoking, the fish are coloured yellow. The final stage of the process involves packing the smoked fish into boxes. Once packed, these boxes are loaded into refrigerated trucks and dispatched to shops for sale to consumers.",
+        sample_answer_vi: "Sơ đồ minh họa các giai đoạn khác nhau trong quy trình sản xuất cá hun khói.\n\nNhìn chung, đây là một quy trình tuyến tính, bao gồm một số bước riêng biệt, bắt đầu bằng việc đánh bắt cá và kết thúc bằng việc sản phẩm cuối cùng được gửi đến các cửa hàng. Các giai đoạn chính có thể được phân loại thành chuẩn bị, xử lý và phân phối.\n\nQuy trình bắt đầu khi cá được đánh bắt trên biển và vận chuyển đến cảng. Trong giai đoạn chuẩn bị ban đầu, cá được làm sạch và bỏ ruột. Sau đó, cá được ngâm trong dung dịch nước muối, là hỗn hợp của muối và nước, trong khoảng thời gian 30 phút.\n\nGiai đoạn xử lý tiếp theo bắt đầu bằng việc hun khói cá. Chúng được treo thẳng đứng và tiếp xúc với khói gỗ trong 30 phút nữa. Sau khi hun khói, cá được nhuộm màu vàng. Giai đoạn cuối cùng của quy trình bao gồm việc đóng gói cá hun khói vào hộp. Sau khi được đóng gói, những chiếc hộp này được chất lên xe tải lạnh và gửi đến các cửa hàng để bán cho người tiêu dùng.",
+        sample_outline_en: `1. Intro: Paraphrase the prompt (process of producing smoked fish).\n2. Overview: State it's a linear process with several steps, categorized into preparation, treatment, and distribution.\n3. Body 1 (Preparation): Describe the first steps: catching, cleaning, gutting, and soaking in brine with time specified.\n4. Body 2 (Treatment & Distribution): Describe the subsequent steps: smoking, colouring, packing, and dispatching.`,
+        sample_outline_vi: `1. Mở bài: Diễn giải lại đề bài (quy trình sản xuất cá hun khói).\n2. Tổng quan: Nêu rõ đây là một quy trình tuyến tính với nhiều bước, được phân loại thành chuẩn bị, xử lý và phân phối.\n3. Thân bài 1 (Chuẩn bị): Mô tả các bước đầu tiên: đánh bắt, làm sạch, bỏ ruột và ngâm nước muối với thời gian cụ thể.\n4. Thân bài 2 (Xử lý & Phân phối): Mô tả các bước tiếp theo: hun khói, nhuộm màu, đóng gói và gửi đi.`,
+        vocabulary: [
+            { word: 'illustrates', ipa: '/ˈɪləstreɪts/', pos: 'v.', vi: 'minh họa' },
+            { word: 'linear process', ipa: '/ˈlɪniər ˈprəʊses/', pos: 'n. phr.', vi: 'quy trình tuyến tính' },
+            { word: 'culminating in', ipa: '/ˈkʌlmɪneɪtɪŋ ɪn/', pos: 'v. phr.', vi: 'kết thúc bằng' },
+            { word: 'dispatched', ipa: '/dɪˈspætʃt/', pos: 'v.', vi: 'được gửi đi' },
+            { word: 'brine solution', ipa: '/braɪn səˈluːʃn/', pos: 'n. phr.', vi: 'dung dịch nước muối' },
+            { word: 'subsequent', ipa: '/ˈsʌbsɪkwənt/', pos: 'adj.', vi: 'tiếp theo, sau đó' }
+        ]
+    }
+};
