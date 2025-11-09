@@ -2,6 +2,24 @@
 // ⚡ CLOUD RUN OPTIMIZED: Load environment variables first (non-blocking)
 require('dotenv').config();
 
+// 🔒 SECURITY: Validate required environment variables
+const ADMIN_KEY = process.env.ADMIN_KEY;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!ADMIN_KEY) {
+    console.error('❌ CRITICAL: ADMIN_KEY environment variable is required');
+    console.error('   Server cannot start without admin key');
+    process.exit(1);
+}
+
+if (!ADMIN_PASSWORD) {
+    console.error('❌ CRITICAL: ADMIN_PASSWORD environment variable is required');
+    console.error('   Server cannot start without admin password');
+    process.exit(1);
+}
+
+console.log('✅ Admin credentials loaded from environment variables');
+
 // ⚡ CLOUD RUN OPTIMIZED: Load core modules synchronously (lightweight)
 const express = require('express');
 const path = require('path');
@@ -36,18 +54,6 @@ const loadHeavyModules = () => {
   }
 };
 
-// Import leaderboard routes (must be before loadDatabasePool)
-const { router: leaderboardRouter, setPool: setLeaderboardPool } = require('./api/leaderboard');
-
-// Set pool for leaderboard router after pool is loaded
-// This will be called in loadDatabasePool() or after pool initialization
-const initializeLeaderboardPool = () => {
-  if (pool && isRealDatabasePool()) {
-    setLeaderboardPool(pool);
-    console.log('✅ Leaderboard pool initialized');
-  }
-};
-
 // ⚡ CLOUD RUN OPTIMIZED: Load database pool lazily - only when needed
 // This prevents database connection from blocking server startup
 const loadDatabasePool = () => {
@@ -56,8 +62,6 @@ const loadDatabasePool = () => {
     if (dbPool && dbPool !== null) {
       pool = dbPool;
       console.log('✅ Database pool loaded successfully');
-      // Initialize leaderboard pool after database pool is loaded
-      initializeLeaderboardPool();
       return true;
     } else {
       console.log('⚠️  Database pool is null, using mock data for development');
@@ -472,7 +476,14 @@ const ensureAdminUserExists = async () => {
     const client = await getDatabaseClient();
     try {
         const adminEmail = 'admin@gmail.com';
-        const adminPassword = '01111110';
+        // ❌ REMOVED: Hardcoded password '01111110' - security risk!
+        // ✅ FIXED: Use environment variable
+        const adminPassword = process.env.ADMIN_PASSWORD;
+        
+        if (!adminPassword) {
+            console.error('❌ ADMIN_PASSWORD environment variable is required');
+            throw new Error('ADMIN_PASSWORD environment variable is required');
+        }
         const adminName = 'Admin';
         const adminRole = 'Admin';
         const adminBananaBalance = 10000;
@@ -524,7 +535,8 @@ const ensureAdminUserExists = async () => {
 // --- Admin Authentication Middleware ---
 const adminAuth = (req, res, next) => {
     const adminKey = req.headers['x-admin-key'];
-    if (adminKey && adminKey === (process.env.ADMIN_KEY || '01111110')) { 
+    // ✅ FIXED: Use ADMIN_KEY from top of file (already validated)
+    if (adminKey && adminKey === ADMIN_KEY) { 
         next();
     } else {
         res.status(403).json({ error: 'Forbidden: Admin access required.' });
@@ -986,10 +998,10 @@ app.delete('/api/users/:id', adminAuth, async (req, res) => {
 // --- User Profile Update Endpoint (User can update their own profile) ---
 app.put('/api/users/profile/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, email, password } = req.body;
+    const { name, email, password, bananaBalance } = req.body;
     const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
     
-    console.log('👤 [API PUT /api/users/profile/:id] User profile update request:', { id, hasName: !!name, hasEmail: !!email, hasPassword: !!password, ip: clientIP });
+    console.log('👤 [API PUT /api/users/profile/:id] User profile update request:', { id, hasName: !!name, hasEmail: !!email, hasPassword: !!password, hasBananaBalance: bananaBalance !== undefined, ip: clientIP });
     
     // 🔒 SECURITY: Validate input
     if (!id || typeof id !== 'string' || id.trim() === '') {
@@ -1030,6 +1042,17 @@ app.put('/api/users/profile/:id', async (req, res) => {
         fields.push(`password = $${fields.length + 1}`);
         values.push(password);
         console.log('✅ [API PUT /api/users/profile/:id] Password will be updated');
+    }
+    // Update bananaBalance if provided
+    if (bananaBalance !== undefined && bananaBalance !== null) {
+        // 🔒 SECURITY: Validate bananaBalance is a number and non-negative
+        if (typeof bananaBalance !== 'number' || bananaBalance < 0) {
+            console.warn('⚠️ [SECURITY] Invalid bananaBalance in profile update request:', { id, bananaBalance, ip: clientIP });
+            return res.status(400).json({ error: 'Invalid banana balance.' });
+        }
+        fields.push(`"bananaBalance" = $${fields.length + 1}`);
+        values.push(bananaBalance);
+        console.log('✅ [API PUT /api/users/profile/:id] BananaBalance will be updated to:', bananaBalance);
     }
     // Always process email if provided (even if it's the same)
     if (email !== undefined && email !== null) {
@@ -2364,8 +2387,6 @@ app.post('/api/daily-checkin', authenticateToken, async (req, res) => {
             // 🔒 SECURITY: Use server-side date (not client-side) to prevent date manipulation
             const serverDate = new Date();
             const serverDateString = serverDate.toISOString().split('T')[0]; // YYYY-MM-DD format
-            const dayOfWeek = serverDate.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-            const isSunday = dayOfWeek === 0;
             
             // 🔒 SECURITY: Verify user exists
             const userResult = await client.query('SELECT id, "bananaBalance" FROM users WHERE id = $1', [authenticatedUserId]);
@@ -2377,6 +2398,7 @@ app.post('/api/daily-checkin', authenticateToken, async (req, res) => {
             const currentBalance = userResult.rows[0].bananaBalance || 0;
             
             // 🔒 SECURITY: Check if user already checked in today (using server date)
+            // 1 ngày chỉ được điểm danh 1 lần
             const existingCheckin = await client.query(
                 'SELECT id, checkin_date, bananas_earned FROM daily_checkins WHERE user_id = $1 AND checkin_date = $2',
                 [authenticatedUserId, serverDateString]
@@ -2393,8 +2415,8 @@ app.post('/api/daily-checkin', authenticateToken, async (req, res) => {
             }
             
             // Calculate bananas to award
-            // Sunday: 5 bananas, other days: 3 bananas
-            const bananasToAward = isSunday ? 5 : 3;
+            // Cứ điểm danh là được 3 chuối
+            const bananasToAward = 3;
             const newBalance = currentBalance + bananasToAward;
             
             // Start transaction
@@ -2405,7 +2427,7 @@ app.post('/api/daily-checkin', authenticateToken, async (req, res) => {
                 await client.query(
                     `INSERT INTO daily_checkins (user_id, checkin_date, bananas_earned, is_sunday)
                      VALUES ($1, $2, $3, $4)`,
-                    [authenticatedUserId, serverDateString, bananasToAward, isSunday]
+                    [authenticatedUserId, serverDateString, bananasToAward, false]
                 );
                 
                 // Update user balance
@@ -2423,7 +2445,7 @@ app.post('/api/daily-checkin', authenticateToken, async (req, res) => {
                         bananasToAward,
                         currentBalance,
                         newBalance,
-                        isSunday ? 'Điểm danh Chủ Nhật' : 'Điểm danh hàng ngày',
+                        'Điểm danh hàng ngày',
                         authenticatedUserId
                     ]
                 );
@@ -2435,12 +2457,9 @@ app.post('/api/daily-checkin', authenticateToken, async (req, res) => {
                 
                 res.json({
                     success: true,
-                    message: isSunday 
-                        ? `Chúc mừng! Bạn đã điểm danh Chủ Nhật và nhận được ${bananasToAward} chuối! 🎉`
-                        : `Chúc mừng! Bạn đã điểm danh và nhận được ${bananasToAward} chuối! 🎉`,
+                    message: `Chúc mừng! Bạn đã điểm danh và nhận được ${bananasToAward} chuối! 🎉`,
                     bananasEarned: bananasToAward,
                     newBalance: newBalance,
-                    isSunday: isSunday,
                     checkinDate: serverDateString
                 });
             } catch (transactionErr) {
@@ -2469,8 +2488,6 @@ app.get('/api/daily-checkin/status', authenticateToken, async (req, res) => {
     try {
         const serverDate = new Date();
         const serverDateString = serverDate.toISOString().split('T')[0];
-        const dayOfWeek = serverDate.getDay();
-        const isSunday = dayOfWeek === 0;
         
         const checkinResult = await pool.query(
             'SELECT id, checkin_date, bananas_earned, is_sunday FROM daily_checkins WHERE user_id = $1 AND checkin_date = $2',
@@ -2478,14 +2495,14 @@ app.get('/api/daily-checkin/status', authenticateToken, async (req, res) => {
         );
         
         const hasCheckedInToday = checkinResult.rows.length > 0;
-        const bananasToAward = isSunday ? 5 : 3;
+        // Cứ điểm danh là được 3 chuối
+        const bananasToAward = 3;
         
         res.json({
             hasCheckedInToday,
             checkinDate: hasCheckedInToday ? checkinResult.rows[0].checkin_date : null,
             bananasEarned: hasCheckedInToday ? checkinResult.rows[0].bananas_earned : null,
             bananasToAward,
-            isSunday,
             todayDate: serverDateString
         });
     } catch (err) {
@@ -2655,9 +2672,6 @@ app.get('/api/user-progress/summary', adminAuth, async (req, res) => {
         res.status(500).json({ error: 'Server error while fetching student summary.' });
     }
 });
-
-// Leaderboard API routes
-app.use('/api/leaderboard', leaderboardRouter);
 
 // Health check endpoint (must be before catch-all route)
 app.get('/health', (req, res) => {
