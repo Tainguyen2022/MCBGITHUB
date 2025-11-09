@@ -2103,15 +2103,37 @@ app.post('/api/banana-transactions/public', async (req, res) => {
     }
     
     // 🔒 SECURITY: Verify user exists and credentials are correct
+    // ✅ FIX: Use bcrypt to verify password (not plain text comparison)
     try {
-        const userCheck = await pool.query('SELECT id, email, password, "bananaBalance" FROM users WHERE id = $1 AND email = $2 AND password = $3', [userId, userEmail, userPassword]);
+        const userCheck = await pool.query('SELECT id, email, password, "bananaBalance" FROM users WHERE id = $1 AND email = $2', [userId, userEmail]);
         if (userCheck.rows.length === 0) {
             console.warn('⚠️ [SECURITY] Invalid credentials in public banana transaction request:', { userId, email: userEmail, ip: clientIP });
+            // Add delay to prevent timing attacks
+            await new Promise(resolve => setTimeout(resolve, 500));
+            return res.status(401).json({ error: 'Invalid user credentials.' });
+        }
+        
+        const user = userCheck.rows[0];
+        
+        // 🔒 SECURITY: Verify password with bcrypt
+        let passwordValid = false;
+        if (user.password && user.password.startsWith('$2b$')) {
+            // Password is bcrypt hash
+            passwordValid = await bcrypt.compare(userPassword, user.password);
+        } else {
+            // Legacy plain text password (for migration)
+            passwordValid = (user.password === userPassword);
+        }
+        
+        if (!passwordValid) {
+            console.warn('⚠️ [SECURITY] Invalid password in public banana transaction request:', { userId, email: userEmail, ip: clientIP });
+            // Add delay to prevent timing attacks
+            await new Promise(resolve => setTimeout(resolve, 500));
             return res.status(401).json({ error: 'Invalid user credentials.' });
         }
         
         // ✅ User authenticated successfully
-        console.log('✅ [SECURITY] User authenticated for public transaction:', { userId, email: userCheck.rows[0].email, ip: clientIP });
+        console.log('✅ [SECURITY] User authenticated for public transaction:', { userId, email: user.email, ip: clientIP });
     } catch (err) {
         console.error('❌ [SECURITY] Error checking user credentials:', err.message);
         return res.status(500).json({ error: 'Server error while verifying user.' });
