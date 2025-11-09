@@ -25,6 +25,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 
 // ⚡ CLOUD RUN OPTIMIZED: Initialize database pool as mock (non-blocking)
 // Real pool will be loaded after server starts
@@ -716,14 +717,41 @@ app.post('/api/login', async (req, res) => {
         client = await getDatabaseClient();
         await client.query('BEGIN');
 
-        // Verify user credentials
-        const result = await client.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email, password]);
+        // 🔒 SECURITY: Verify user credentials with bcrypt
+        // First, get user by email only (password is hashed, can't compare in SQL)
+        const result = await client.query('SELECT * FROM users WHERE email = $1', [email]);
         if (result.rows.length === 0) {
             await client.query('ROLLBACK');
+            // 🔒 SECURITY: Don't reveal if email exists or not (prevent user enumeration)
+            // Add delay to prevent timing attacks
+            await new Promise(resolve => setTimeout(resolve, 500));
             return res.status(401).json({ error: 'Invalid email or password.' });
         }
 
         const user = result.rows[0];
+        
+        // 🔒 SECURITY: Compare password with bcrypt hash
+        // Support both bcrypt hashes and plain text (for migration)
+        let passwordValid = false;
+        if (user.password && user.password.startsWith('$2b$')) {
+            // Password is bcrypt hash
+            passwordValid = await bcrypt.compare(password, user.password);
+        } else {
+            // Legacy plain text password (for migration)
+            passwordValid = (user.password === password);
+            // 🔒 SECURITY: If plain text, hash it now for future use
+            if (passwordValid) {
+                const hashedPassword = await bcrypt.hash(password, 10);
+                await client.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, user.id]);
+            }
+        }
+        
+        if (!passwordValid) {
+            await client.query('ROLLBACK');
+            // 🔒 SECURITY: Add delay to prevent timing attacks
+            await new Promise(resolve => setTimeout(resolve, 500));
+            return res.status(401).json({ error: 'Invalid email or password.' });
+        }
 
         // 🔒 SECURITY: Enforce device limits (max 2 laptops + 1 mobile) while allowing same machine multiple browsers
         // 🔒 SECURITY: Logout previous session on the same machine (same fingerprint)
@@ -829,7 +857,8 @@ app.post('/api/logout', authenticateToken, async (req, res) => {
 
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
-    console.log('🟢 [API POST /api/register] Request:', { name, email });
+    // 🔒 SECURITY: Don't log password
+    console.log('🟢 [API POST /api/register] Request:', { name, email, hasPassword: !!password });
     
     if (!name || !email || !password) {
         console.log('❌ [API POST] Missing required fields');
@@ -847,8 +876,12 @@ app.post('/api/register', async (req, res) => {
             return res.status(409).json({ error: 'An account with this email already exists.' });
         }
 
+        // 🔒 SECURITY: Hash password with bcrypt before storing
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+
         const newUser = {
-            id: `user_${Date.now()}`, name, email, password, role: 'Free',
+            id: `user_${Date.now()}`, name, email, password: hashedPassword, role: 'Free',
             packages: [], activated: true, mobileLogin: false,
             joinDate: new Date().toLocaleDateString('en-GB'), expiryDate: '-',
             registered_at: new Date().toISOString(), bananaBalance: 30,
@@ -861,6 +894,9 @@ app.post('/api/register', async (req, res) => {
             Object.values(newUser)
         );
         
+        // 🔒 SECURITY: Don't return password in response
+        const { password: _, ...userWithoutPassword } = newUser;
+        
         console.log('✅ [API POST] User registered successfully:', newUser.id);
         
         // Backup users to Cloud Storage (async, non-blocking)
@@ -868,7 +904,8 @@ app.post('/api/register', async (req, res) => {
             console.warn('Background backup failed after registration:', err.message);
         });
         
-        res.status(201).json(newUser);
+        // 🔒 SECURITY: Return user without password
+        res.status(201).json(userWithoutPassword);
     } catch (err) {
         console.error('❌ [API POST] Registration Error:', err.message, err.stack);
         res.status(500).json({ error: 'Server error during registration.' });
@@ -1039,9 +1076,12 @@ app.put('/api/users/profile/:id', async (req, res) => {
         console.log('✅ [API PUT /api/users/profile/:id] Name will be updated to:', name);
     }
     if (password) {
+        // 🔒 SECURITY: Hash password with bcrypt before storing
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
         fields.push(`password = $${fields.length + 1}`);
-        values.push(password);
-        console.log('✅ [API PUT /api/users/profile/:id] Password will be updated');
+        values.push(hashedPassword);
+        console.log('✅ [API PUT /api/users/profile/:id] Password will be updated (hashed)');
     }
     // Update bananaBalance if provided
     if (bananaBalance !== undefined && bananaBalance !== null) {
@@ -1187,8 +1227,11 @@ app.put('/api/users/:id', adminAuth, async (req, res) => {
         values.push(role);
     }
     if (password) {
+        // 🔒 SECURITY: Hash password with bcrypt before storing
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
         fields.push(`password = $${fields.length + 1}`);
-        values.push(password);
+        values.push(hashedPassword);
     }
     // Always process email if provided (even if it's the same)
     if (email !== undefined && email !== null) {
