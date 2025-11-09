@@ -3,91 +3,11 @@ import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { User } from './types';
 
-// 🔒 Security Cleanup: Xóa dữ liệu người dùng nhạy cảm khỏi localStorage
-// Chỉ chạy 1 lần khi app load, không reload trang
-let cleanupExecuted = false;
-
-const cleanupSensitiveLocalStorage = () => {
-  // Chỉ chạy 1 lần để tránh reload liên tục
-  if (cleanupExecuted) return;
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
-  
-  cleanupExecuted = true;
-  
-  const SENSITIVE_KEYS = [
-    'MATCANBAN_USERS',
-    'MATCANBAN_USER',
-    'USER_DATA',
-    'USER_PASSWORD',
-    'PASSWORD',
-    'USER_INFO',
-    'CURRENT_USER_DATA',
-    'ADMIN_DATA',
-    'ADMIN_USER',
-    'ADMIN_PASSWORD',
-    'ADMIN_KEY',
-    'VITE_ADMIN_KEY'
-  ];
-  
-  const SAFE_KEYS = ['authToken', 'sessionToken', 'deviceType', 'browserFingerprint'];
-  
-  let deletedCount = 0;
-  
-  // Xóa keys cụ thể (chạy im lặng, không log để tránh spam)
-  SENSITIVE_KEYS.forEach(key => {
-    if (localStorage.getItem(key)) {
-      localStorage.removeItem(key);
-      deletedCount++;
-    }
-  });
-  
-  // Xóa tất cả keys chứa 'USER' hoặc 'PASSWORD' (trừ safe keys)
-  const allKeys = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && !SAFE_KEYS.includes(key)) {
-      const upperKey = key.toUpperCase();
-      if (upperKey.includes('USER') || upperKey.includes('PASSWORD') || upperKey.includes('MATCANBAN') || upperKey.includes('ADMIN')) {
-        allKeys.push(key);
-      }
-    }
-  }
-  
-  allKeys.forEach(key => {
-    try {
-      const value = localStorage.getItem(key);
-      if (value) {
-        const parsed = JSON.parse(value);
-        // Kiểm tra xem có chứa password không
-        const hasPassword = Array.isArray(parsed) 
-          ? parsed.some(item => item && typeof item === 'object' && 'password' in item)
-          : parsed && typeof parsed === 'object' && 'password' in parsed;
-        
-        if (hasPassword) {
-          localStorage.removeItem(key);
-          deletedCount++;
-        }
-      }
-    } catch (e) {
-      // Không phải JSON, xóa luôn nếu chứa sensitive keywords
-      localStorage.removeItem(key);
-      deletedCount++;
-    }
-  });
-  
-  // Chỉ log trong development mode, không log trong production để tránh spam
-  if (deletedCount > 0 && import.meta.env.DEV) {
-    console.warn(`🔒 Security Cleanup: Đã xóa ${deletedCount} key(s) chứa dữ liệu nhạy cảm`);
-  }
-};
-
 // Import Pages
 import GrammarPage from './pages/GrammarPage';
 import TipsPage from './pages/TipsPage';
 import Mtest from './pages/Mtest';
 import TOEICPart5ByYear from './pages/TOEICPart5ByYear';
-import TOEICPart6ByYear from './pages/TOEICPart6ByYear';
-import TOEICPart6_2025_Test1_Questions135_138 from './pages/TOEICPart6_2025_Test1_Questions135_138';
 import TOEICPart7ByYear from './pages/TOEICPart7ByYear';
 import TOEICPart7EmailReading from './pages/TOEICPart7EmailReading';
 import TOEICPart7EmailList from './pages/TOEICPart7EmailList';
@@ -186,6 +106,11 @@ import TOEICPart7_2025_Test1_Card172_175 from './pages/TOEICPart7_2025_Test1_Car
 import TOEICPart7_2025_Test1_CardsHub from './pages/TOEICPart7_2025_Test1_CardsHub';
 import TOEICPart7_2025_Test2_Card147_148 from './pages/TOEICPart7_2025_Test2_Card147_148';
 import TOEICPart7_2025_Test2_Card149_150 from './pages/TOEICPart7_2025_Test2_Card149_150';
+import TOEICPart7_2025_Test2_Card151_152 from './pages/TOEICPart7_2025_Test2_Card151_152';
+import TOEICPart7_2025_Test2_Card153_154 from './pages/TOEICPart7_2025_Test2_Card153_154';
+import TOEICPart7_2025_Test2_Card155_157 from './pages/TOEICPart7_2025_Test2_Card155_157';
+import TOEICPart7_2025_Test2_Card158_160 from './pages/TOEICPart7_2025_Test2_Card158_160';
+import TOEICPart7_2025_Test2_Card161_163 from './pages/TOEICPart7_2025_Test2_Card161_163';
 import TOEICPart7_2025_Test1_INVO_Mini1 from './pages/TOEICPart7_2025_Test1_INVO_Mini1';
 import TOEICPart7_2025_Test1_INVO_Mini2 from './pages/TOEICPart7_2025_Test1_INVO_Mini2';
 import TOEICPart7_2025_Test1_INVO_Mini3 from './pages/TOEICPart7_2025_Test1_INVO_Mini3';
@@ -455,7 +380,7 @@ import Header from './components/Header';
 import CambridgePracticePage from './pages/CambridgePracticePage';
 import BananaAchievements from './pages/BananaAchievements';
 import AdminPage from './pages/AdminPage'; // NEW: Admin Page
-import WeeklyLeaderboard from './pages/WeeklyLeaderboard'; // NEW: Weekly Leaderboard
+import ProfilePage from './pages/ProfilePage'; // NEW: Profile Page
 
 // Protected Route Component for Admin
 const ProtectedRoute: React.FC<{ children: React.ReactNode; requiredRole?: string }> = ({ children, requiredRole = 'Admin' }) => {
@@ -521,6 +446,16 @@ import VSTEPReadingMainIdeaTest5 from './pages/VSTEPReadingMainIdeaTest5';
 import VSTEPReadingMainIdeaTest6 from './pages/VSTEPReadingMainIdeaTest6';
 import VSTEPReadingVocabulary from './pages/VSTEPReadingVocabulary';
 import VSTEPReadingVocabularyTest1 from './pages/VSTEPReadingVocabularyTest1';
+import VSTEPReadingVocabularyTest2 from './pages/VSTEPReadingVocabularyTest2';
+import VSTEPReadingVocabularyTest3 from './pages/VSTEPReadingVocabularyTest3';
+import VSTEPReadingVocabularyTest4 from './pages/VSTEPReadingVocabularyTest4';
+import VSTEPReadingVocabularyTest5 from './pages/VSTEPReadingVocabularyTest5';
+import VSTEPReadingVocabularyTest6 from './pages/VSTEPReadingVocabularyTest6';
+import VSTEPReadingVocabularyTest7 from './pages/VSTEPReadingVocabularyTest7';
+import VSTEPReadingVocabularyTest8 from './pages/VSTEPReadingVocabularyTest8';
+import VSTEPReadingVocabularyTest9 from './pages/VSTEPReadingVocabularyTest9';
+import VSTEPReadingVocabularyTest11 from './pages/VSTEPReadingVocabularyTest11';
+import VSTEPReadingVocabularyTest12 from './pages/VSTEPReadingVocabularyTest12';
 import VSTEPReadingDetail from './pages/VSTEPReadingDetail';
 import VSTEPReadingInference from './pages/VSTEPReadingInference';
 import VSTEPReadingSynthesis from './pages/VSTEPReadingSynthesis';
@@ -600,10 +535,7 @@ const AppLayout: React.FC = () => {
                     <Route path="/grammar" element={<GrammarPage />} />
                     <Route path="/tips" element={<TipsPage />} />
                     <Route path="/mtest" element={<ProtectedTestHubRoute><Mtest /></ProtectedTestHubRoute>} />
-                    <Route path="/leaderboard" element={<WeeklyLeaderboard />} />
                     <Route path="/toeic-part5-by-year" element={<TOEICPart5ByYear />} />
-                    <Route path="/toeic-part6-by-year" element={<TOEICPart6ByYear />} />
-                    <Route path="/toeic-part6-2025-test1-questions135-138" element={<TOEICPart6_2025_Test1_Questions135_138 />} />
                     <Route path="/toeic-part7-by-year" element={<TOEICPart7ByYear />} />
                     <Route path="/toeic-part7-email-list" element={<TOEICPart7EmailList />} />
                     <Route path="/toeic-part7-double-list" element={<TOEICPart7DoubleList />} />
@@ -702,6 +634,11 @@ const AppLayout: React.FC = () => {
                     <Route path="/toeic-part7-2025-test1-card172-175" element={<TOEICPart7_2025_Test1_Card172_175 />} />
                     <Route path="/toeic-part7-2025-test2-card147-148" element={<TOEICPart7_2025_Test2_Card147_148 />} />
                     <Route path="/toeic-part7-2025-test2-card149-150" element={<TOEICPart7_2025_Test2_Card149_150 />} />
+                    <Route path="/toeic-part7-2025-test2-card151-152" element={<TOEICPart7_2025_Test2_Card151_152 />} />
+                    <Route path="/toeic-part7-2025-test2-card153-154" element={<TOEICPart7_2025_Test2_Card153_154 />} />
+                    <Route path="/toeic-part7-2025-test2-card155-157" element={<TOEICPart7_2025_Test2_Card155_157 />} />
+                    <Route path="/toeic-part7-2025-test2-card158-160" element={<TOEICPart7_2025_Test2_Card158_160 />} />
+                    <Route path="/toeic-part7-2025-test2-card161-163" element={<TOEICPart7_2025_Test2_Card161_163 />} />
                     <Route path="/toeic-part7-2025-test1-card155-156" element={<TOEICPart7_2025_Test1_CardsHub />} />
                     <Route path="/toeic-part7-2025-test1-card157-158" element={<TOEICPart7_2025_Test1_CardsHub />} />
                     <Route path="/toeic-part7-2025-test1-card159-160" element={<TOEICPart7_2025_Test1_CardsHub />} />
@@ -973,6 +910,7 @@ const AppLayout: React.FC = () => {
             <Route path="/giao-tiep-du-lich-vung-tau" element={<GiaoTiepDuLichVungTau />} />
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/register" element={<RegisterPage />} />
+                    <Route path="/profile" element={<ProtectedTestHubRoute><ProfilePage /></ProtectedTestHubRoute>} />
                     <Route path="/cambridge-practice/:exam/:partId" element={<CambridgePracticePage />} />
                     <Route path="/banana-achievements" element={<BananaAchievements />} />
                     <Route path="/add-bananas" element={<AddBananasPage />} />
@@ -1024,6 +962,16 @@ const AppLayout: React.FC = () => {
                 <Route path="/vstep-reading-main-idea-test6" element={<VSTEPReadingMainIdeaTest6 />} />
                 <Route path="/vstep-reading-vocabulary" element={<VSTEPReadingVocabulary />} />
                 <Route path="/vstep-reading-vocabulary-test1" element={<VSTEPReadingVocabularyTest1 />} />
+                <Route path="/vstep-reading-vocabulary-test2" element={<VSTEPReadingVocabularyTest2 />} />
+                <Route path="/vstep-reading-vocabulary-test3" element={<VSTEPReadingVocabularyTest3 />} />
+                <Route path="/vstep-reading-vocabulary-test4" element={<VSTEPReadingVocabularyTest4 />} />
+                <Route path="/vstep-reading-vocabulary-test5" element={<VSTEPReadingVocabularyTest5 />} />
+                <Route path="/vstep-reading-vocabulary-test6" element={<VSTEPReadingVocabularyTest6 />} />
+                <Route path="/vstep-reading-vocabulary-test7" element={<VSTEPReadingVocabularyTest7 />} />
+                <Route path="/vstep-reading-vocabulary-test8" element={<VSTEPReadingVocabularyTest8 />} />
+                <Route path="/vstep-reading-vocabulary-test9" element={<VSTEPReadingVocabularyTest9 />} />
+                <Route path="/vstep-reading-vocabulary-test11" element={<VSTEPReadingVocabularyTest11 />} />
+                <Route path="/vstep-reading-vocabulary-test12" element={<VSTEPReadingVocabularyTest12 />} />
                 <Route path="/vstep-reading-detail" element={<VSTEPReadingDetail />} />
                 <Route path="/vstep-reading-inference" element={<VSTEPReadingInference />} />
                 <Route path="/vstep-reading-synthesis" element={<VSTEPReadingSynthesis />} />
@@ -1049,13 +997,6 @@ const AppLayout: React.FC = () => {
 };
 
 function App() {
-    // 🔒 Security Cleanup: Tự động xóa dữ liệu nhạy cảm khi app load
-    // Chỉ chạy 1 lần để tránh reload liên tục
-    useEffect(() => {
-        // Chỉ chạy 1 lần khi component mount
-        cleanupSensitiveLocalStorage();
-    }, []);
-    
     return (
         <AuthProvider>
             <HashRouter
