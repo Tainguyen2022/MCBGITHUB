@@ -33,7 +33,14 @@ const ConnectionStatusPanel: React.FC = () => {
 
     const checkSqlStatus = async () => {
         try {
-            const adminKey = (import.meta as any).env?.VITE_ADMIN_KEY || '01111110';
+            // ✅ FIX: Use VITE_ADMIN_KEY from environment, no hardcoded fallback
+            const adminKey = (import.meta as any).env?.VITE_ADMIN_KEY;
+            if (!adminKey) {
+                setSqlStatus('disconnected');
+                setSqlError('VITE_ADMIN_KEY chưa được cấu hình. Thêm VITE_ADMIN_KEY vào .env file.');
+                console.error('❌ VITE_ADMIN_KEY not found in environment variables');
+                return;
+            }
             const controller = new AbortController();
             const timeoutId = window.setTimeout(() => controller.abort(), 8000);
             const response = await fetch('/api/users', {
