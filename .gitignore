@@ -1,0 +1,51 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Sensitive files
+*SECRET*
+*PASSWORD*
+*CREDENTIALS*
+ADMIN-ACCOUNT-INFO.md
+ADMIN-CREDENTIALS-FIX-COMPLETE.md
+
+# Database exports
+*.sql
+database-export*.sql
+database-url.txt
+
+# Cloud Run exports
+env-vars.json
+revision-info.json
+service-config.json
+cloud-run-restore*/
+
+# Logs
+logs/
+*.log
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+.vite/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
