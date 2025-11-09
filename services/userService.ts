@@ -145,26 +145,30 @@ export const getUsers = async (adminKey?: string): Promise<User[]> => {
     // ❌ REMOVED: Hardcoded fallback '01111110' - security risk!
     const adminKeyToUse = adminKey || import.meta.env.VITE_ADMIN_KEY;
     
-    if (!adminKeyToUse) {
-        throw new Error('Admin authentication required. Please provide admin key.');
-    }
-    
-    try {
-        const { data: apiUsers, error } = await callAPI<User[]>('/api/users', {
-            headers: {
-                'X-Admin-Key': adminKeyToUse,
-            },
-        });
-        if (!error && apiUsers && Array.isArray(apiUsers)) {
-            // Cache in localStorage for offline access
-            saveData(LOCAL_STORAGE_KEYS.USERS, apiUsers);
-            return apiUsers;
+    // ✅ FIX: Only call API if admin key is provided
+    // If no admin key, skip API call and use localStorage fallback
+    // This allows regular users to login without admin key
+    if (adminKeyToUse) {
+        try {
+            const { data: apiUsers, error } = await callAPI<User[]>('/api/users', {
+                headers: {
+                    'X-Admin-Key': adminKeyToUse,
+                },
+            });
+            if (!error && apiUsers && Array.isArray(apiUsers)) {
+                // Cache in localStorage for offline access
+                saveData(LOCAL_STORAGE_KEYS.USERS, apiUsers);
+                return apiUsers;
+            }
+        } catch (error) {
+            console.warn('Failed to fetch users from API, using localStorage:', error);
         }
-    } catch (error) {
-        console.warn('Failed to fetch users from API, using localStorage:', error);
+    } else {
+        // No admin key provided - skip API call, use localStorage only
+        console.log('No admin key provided, using localStorage fallback');
     }
     
-    // Fallback to localStorage
+    // Fallback to localStorage (works for regular users without admin key)
     return loadOrInitializeData(LOCAL_STORAGE_KEYS.USERS, defaultUsers);
 };
 
