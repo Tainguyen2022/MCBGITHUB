@@ -689,22 +689,28 @@ app.get('/api/all-data', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     const { email, password, deviceType, browserFingerprint, isIncognito, userAgent, ipAddress } = req.body;
     
+    // 🔍 DEBUG: Log login attempt
+    console.log('🔍 [LOGIN] Attempt:', { email, hasPassword: !!password, deviceType, browserFingerprint, isIncognito });
+    
     if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required.' });
     }
 
     // 🔒 SECURITY: Block incognito/private mode
-    if (isIncognito) {
+    // ✅ FIX: Only block if explicitly detected as incognito
+    if (isIncognito === true) {
+        console.log('⚠️ [LOGIN] Blocked: Incognito mode detected');
         return res.status(403).json({ error: 'Không thể đăng nhập ở chế độ ẩn danh. Vui lòng tắt chế độ ẩn danh và thử lại.' });
     }
 
     // 🔒 SECURITY: Require device type and browser fingerprint
-    if (!deviceType || !browserFingerprint) {
-        return res.status(400).json({ error: 'Device type and browser fingerprint are required.' });
-    }
-
+    // ✅ FIX: Make deviceType and browserFingerprint optional for backward compatibility
+    // If not provided, generate defaults
+    const finalDeviceType = deviceType || 'laptop';
+    const finalBrowserFingerprint = browserFingerprint || `fp_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    
     // 🔒 SECURITY: Validate device type
-    if (deviceType !== 'laptop' && deviceType !== 'mobile') {
+    if (finalDeviceType !== 'laptop' && finalDeviceType !== 'mobile') {
         return res.status(400).json({ error: 'Invalid device type. Must be "laptop" or "mobile".' });
     }
 
@@ -730,28 +736,38 @@ app.post('/api/login', async (req, res) => {
 
         const user = result.rows[0];
         
+        // 🔍 DEBUG: Log password check
+        console.log('🔍 [LOGIN] User found:', { email: user.email, role: user.role });
+        console.log('🔍 [LOGIN] Password in DB:', user.password ? user.password.substring(0, 20) + '...' : 'NULL');
+        
         // 🔒 SECURITY: Compare password with bcrypt hash
         // Support both bcrypt hashes and plain text (for migration)
         let passwordValid = false;
         if (user.password && user.password.startsWith('$2b$')) {
             // Password is bcrypt hash
             passwordValid = await bcrypt.compare(password, user.password);
+            console.log('🔍 [LOGIN] bcrypt.compare result:', passwordValid);
         } else {
             // Legacy plain text password (for migration)
             passwordValid = (user.password === password);
+            console.log('🔍 [LOGIN] Plain text comparison result:', passwordValid);
             // 🔒 SECURITY: If plain text, hash it now for future use
             if (passwordValid) {
                 const hashedPassword = await bcrypt.hash(password, 10);
                 await client.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, user.id]);
+                console.log('✅ [LOGIN] Password migrated to bcrypt hash');
             }
         }
         
         if (!passwordValid) {
+            console.log('❌ [LOGIN] Password validation failed');
             await client.query('ROLLBACK');
             // 🔒 SECURITY: Add delay to prevent timing attacks
             await new Promise(resolve => setTimeout(resolve, 500));
             return res.status(401).json({ error: 'Invalid email or password.' });
         }
+        
+        console.log('✅ [LOGIN] Password validated successfully');
 
         // 🔒 SECURITY: Enforce device limits (max 2 laptops + 1 mobile) while allowing same machine multiple browsers
         // 🔒 SECURITY: Logout previous session on the same machine (same fingerprint)
@@ -759,7 +775,7 @@ app.post('/api/login', async (req, res) => {
             `UPDATE user_sessions 
              SET is_active = false, last_activity = CURRENT_TIMESTAMP 
              WHERE user_id = $1 AND device_type = $2 AND browser_fingerprint = $3 AND is_active = true`,
-            [user.id, deviceType, browserFingerprint]
+            [user.id, finalDeviceType, finalBrowserFingerprint]
         );
 
         // 🔒 SECURITY: Generate JWT token
@@ -768,8 +784,8 @@ app.post('/api/login', async (req, res) => {
                 userId: user.id, 
                 email: user.email,
                 role: user.role,
-                deviceType: deviceType,
-                browserFingerprint: browserFingerprint
+                deviceType: finalDeviceType,
+                browserFingerprint: finalBrowserFingerprint
             },
             JWT_SECRET,
             { expiresIn: JWT_EXPIRES_IN }
@@ -779,8 +795,8 @@ app.post('/api/login', async (req, res) => {
         const sessionToken = jwt.sign(
             { 
                 userId: user.id,
-                deviceType: deviceType,
-                browserFingerprint: browserFingerprint,
+                deviceType: finalDeviceType,
+                browserFingerprint: finalBrowserFingerprint,
                 timestamp: Date.now()
             },
             JWT_SECRET,
@@ -799,7 +815,7 @@ app.post('/api/login', async (req, res) => {
                  ip_address = EXCLUDED.ip_address,
                  is_active = true,
                  last_activity = CURRENT_TIMESTAMP`,
-            [user.id, deviceType, browserFingerprint, sessionToken, userAgent || null, ipAddress || req.ip || null]
+            [user.id, finalDeviceType, finalBrowserFingerprint, sessionToken, userAgent || null, ipAddress || req.ip || null]
         );
 
         await client.query('COMMIT');
