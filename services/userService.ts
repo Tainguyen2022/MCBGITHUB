@@ -68,12 +68,23 @@ const callAPI = async <T>(url: string, options?: RequestInit): Promise<{ data: T
             headers['Authorization'] = `Bearer ${token}`;
         }
         
+        // ✅ FIX: Use proper API base URL
+        // In development, Vite proxy will handle /api/* requests to localhost:3000
+        // In production, use full URL or relative (same origin)
+        const apiBaseUrl = import.meta.env.VITE_API_URL || '';
+        const fullUrl = url.startsWith('http') ? url : `${apiBaseUrl}${url}`;
+        
+        // 🔍 DEBUG: Log API calls in development
+        if (import.meta.env.DEV) {
+            console.log('🔍 [API] Calling:', fullUrl, { method: options?.method || 'GET' });
+        }
+        
         // Add a timeout so UI never hangs indefinitely
         const controller = new AbortController();
         const timeoutId = window.setTimeout(() => controller.abort(), 10000); // 10s timeout
         let response: Response;
         try {
-            response = await fetch(url, {
+            response = await fetch(fullUrl, {
                 ...options,
                 headers,
                 signal: controller.signal,
