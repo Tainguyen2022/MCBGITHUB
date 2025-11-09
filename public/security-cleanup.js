@@ -43,26 +43,10 @@
       }
     }
     
-    // 3. Force logout if user is admin (admin password was exposed)
-    if (currentUserStr) {
-      try {
-        const currentUser = JSON.parse(currentUserStr);
-        if (currentUser && (currentUser.role === 'Admin' || currentUser.email === 'admin@gmail.com')) {
-          // Force logout for admin users
-          localStorage.removeItem('currentUser');
-          localStorage.removeItem('authToken');
-          localStorage.removeItem('sessionToken');
-          console.warn('⚠️ Admin user logged out for security - please login again with NEW password');
-          
-          // Redirect to login if on restricted page
-          if (window.location.pathname.includes('admin')) {
-            window.location.href = '/login';
-          }
-        }
-      } catch (e) {
-        console.warn('Could not check for admin user:', e);
-      }
-    }
+    // ✅ FIX: Removed force logout for admin users
+    // Admin password has been fixed and properly hashed
+    // No need to force logout anymore
+    // This was causing users to be logged out on refresh
     
     // 4. List what's left in localStorage (for verification)
     console.log('📊 Remaining localStorage keys:', Object.keys(localStorage).length);
