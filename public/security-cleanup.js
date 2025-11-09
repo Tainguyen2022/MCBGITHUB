@@ -7,9 +7,16 @@
  * Issues Fixed:
  * - User passwords and full user list exposed in localStorage
  * - Admin credentials visible in client-side code
+ * 
+ * FIXED: Prevent infinite reload loop - only run once per session
  */
 
 (function() {
+  // ✅ FIX: Only run cleanup once per session to prevent reload loops
+  if (sessionStorage.getItem('security-cleanup-done')) {
+    return; // Already ran, skip
+  }
+  
   console.log('🔒 Running security cleanup...');
   
   try {
@@ -60,9 +67,14 @@
     // 4. List what's left in localStorage (for verification)
     console.log('📊 Remaining localStorage keys:', Object.keys(localStorage).length);
     
+    // ✅ FIX: Mark as done to prevent running again
+    sessionStorage.setItem('security-cleanup-done', 'true');
+    
     console.log('✅ Security cleanup completed successfully');
   } catch (error) {
     console.error('❌ Security cleanup error:', error);
+    // Mark as done even on error to prevent infinite loops
+    sessionStorage.setItem('security-cleanup-done', 'true');
   }
 })();
 
