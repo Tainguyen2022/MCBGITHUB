@@ -2,6 +2,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
+import { useScoreAnimation } from '../contexts/ScoreAnimationContext';
+import { ScoreAnimation } from './ScoreAnimation';
 import { BananaIcon } from './Icons';
 import { ChevronDownIcon } from '@heroicons/react/24/outline';
 
@@ -17,6 +19,7 @@ const Header: React.FC = () => {
 	const [showBananaPopup, setShowBananaPopup] = useState(false);
 	const [hearts, setHearts] = useState<Array<{ id: number; x: number; y: number; size: number; delay: number }>>([]);
 	const [stars, setStars] = useState<Array<{ id: number; x: number; y: number; size: number; delay: number }>>([]);
+	const [userScore, setUserScore] = useState<number>(0); // 🔢 Track user total score
 	const userMenuRef = useRef<HTMLDivElement>(null);
 	const speakingDropdownRef = useRef<HTMLDivElement>(null);
 	const writingDropdownRef = useRef<HTMLDivElement>(null);
@@ -27,6 +30,66 @@ const Header: React.FC = () => {
 	// Removed density useEffect - not needed
 
 	// Removed toggleDensity function - not needed
+
+	const { animations } = useScoreAnimation();
+
+	// 🔢 Fetch user score when user logs in or changes
+	useEffect(() => {
+		if (currentUser?.id) {
+			const fetchUserScore = async () => {
+				try {
+					const token = localStorage.getItem('authToken');
+					if (!token) return;
+					
+					const response = await fetch(`/api/user/score/${currentUser.id}`, {
+						headers: {
+							'Authorization': `Bearer ${token}`,
+							'Content-Type': 'application/json'
+						}
+					});
+					
+					if (response.ok) {
+						const data = await response.json();
+						setUserScore(data.totalScore || 0);
+					} else {
+						console.warn('Failed to fetch user score:', response.status);
+						setUserScore(0);
+					}
+				} catch (error) {
+					console.warn('Error fetching user score:', error);
+					setUserScore(0);
+				}
+			};
+			
+			fetchUserScore();
+		} else {
+			setUserScore(0);
+		}
+	}, [currentUser?.id]);
+
+	// 🔢 Update score when animation completes (add points from animations)
+	useEffect(() => {
+		if (animations.length > 0) {
+			// When animation completes, update score
+			// The animation will trigger a score update after it finishes
+			const lastAnimation = animations[animations.length - 1];
+			if (lastAnimation) {
+				// Small delay to let animation complete
+				const timer = setTimeout(() => {
+					setUserScore(prev => prev + lastAnimation.points);
+					// Also update on server
+					if (currentUser?.id) {
+						const token = localStorage.getItem('authToken');
+						if (token) {
+							// Score will be updated when test result is saved
+							// This is just for immediate UI feedback
+						}
+					}
+				}, 100);
+				return () => clearTimeout(timer);
+			}
+		}
+	}, [animations.length, currentUser?.id]);
 
 
 	const handleLogout = () => {
@@ -197,21 +260,21 @@ const Header: React.FC = () => {
 		 )
 	};
 		
-	// FIX: Refactored component to use conditional rendering (if/else) instead of a dynamic Wrapper component.
-	// This resolves a TypeScript error where the `props` object couldn't be correctly assigned to both NavLink and div types.
+	// 🍌 Banana Display - viên thuốc riêng cho chuối
 	const BananaBalanceDisplay: React.FC<{ isMobile?: boolean }> = ({ isMobile = false }) => {
 		// Use bananaBalance as the source of truth - consistent with BananaAchievements page
 		const balance = currentUser ? currentUser.bananaBalance : 0;
 
-		const baseClasses = "flex items-center gap-2 bg-green-400/80 text-yellow-900 font-bold rounded-full transition-transform hover:scale-105 cursor-pointer";
-		const mobileClasses = "text-sm px-2.5 py-1 gap-1.5";
-		const desktopClasses = "text-base px-3 py-1.5";
+		// 🎨 Improved design: Better colors, spacing, and visual appeal
+		const baseClasses = "flex items-center justify-center gap-1.5 bg-gradient-to-r from-yellow-400 via-yellow-500 to-orange-400 text-white font-bold rounded-full transition-all duration-300 hover:scale-110 hover:shadow-xl cursor-pointer shadow-lg border-2 border-yellow-200/30 backdrop-blur-sm";
+		const mobileClasses = "text-xs px-2.5 py-1.5 min-w-[55px]";
+		const desktopClasses = "text-sm px-3 py-2 min-w-[65px]";
 		const finalClasses = `${baseClasses} ${isMobile ? mobileClasses : desktopClasses}`;
 
 		const content = (
 			<>
-				<BananaIcon className={`text-yellow-500 ${isMobile ? 'w-4 h-4' : 'w-5 h-5'}`} />
-				<span className="leading-none">{balance}</span>
+				<BananaIcon className={`text-yellow-100 drop-shadow-md ${isMobile ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
+				<span className={`${isMobile ? 'text-xs' : 'text-sm'} font-extrabold drop-shadow-sm`}>{balance.toLocaleString()}</span>
 			</>
 		);
 		
@@ -230,8 +293,40 @@ const Header: React.FC = () => {
 		);
 	};
 
+	// 🔢 Score Display - viên thuốc riêng cho điểm
+	const ScoreDisplay: React.FC<{ isMobile?: boolean }> = ({ isMobile = false }) => {
+		// 🎨 Improved design: Better colors, spacing, and visual appeal
+		const baseClasses = "flex items-center justify-center gap-1.5 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 text-white font-bold rounded-full transition-all duration-300 hover:scale-110 hover:shadow-xl cursor-pointer shadow-lg border-2 border-blue-200/30 backdrop-blur-sm";
+		const mobileClasses = "text-xs px-2.5 py-1.5 min-w-[55px]";
+		const desktopClasses = "text-sm px-3 py-2 min-w-[65px]";
+		const finalClasses = `${baseClasses} ${isMobile ? mobileClasses : desktopClasses}`;
+
+		const content = (
+			<>
+				<span className={`${isMobile ? 'text-xs' : 'text-sm'} drop-shadow-md`}>⭐</span>
+				<span className={`${isMobile ? 'text-xs' : 'text-sm'} font-extrabold drop-shadow-sm`}>{userScore.toLocaleString()}</span>
+			</>
+		);
+		
+		if (currentUser) {
+			return (
+				<div className={finalClasses} title="Tổng điểm / Total Score">
+					{content}
+				</div>
+			);
+		}
+
+		return (
+			<div onClick={() => navigate('/login')} className={finalClasses} title="Điểm / Score">
+				{content}
+			</div>
+		);
+	};
+
 	return (
-		<header className="app-header sticky top-0 z-50">
+		<>
+			<ScoreAnimation />
+			<header className="app-header sticky top-0 z-50">
 			<nav className="container mx-auto px-2 sm:px-4 lg:px-6 relative">
 				<div className="flex items-center justify-between h-16">
 					<NavLink to="/grammar" className="flex items-center gap-2 group" onClick={() => setIsMobileMenuOpen(false)}>
@@ -444,6 +539,46 @@ const Header: React.FC = () => {
                                     <div className="px-4 py-2 text-xs font-bold text-gray-600 uppercase tracking-wider border-b border-gray-200 mb-2 mt-3">
                                         TOEIC Speaking
                                     </div>
+                                    <NavLink to="/toeic-speaking-full-test1" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 1 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test2" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 2 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test3" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 3 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test4" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 4 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test5" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 5 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test6" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 6 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test7" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 7 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test8" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 8 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test9" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 9 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-speaking-full-test10" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 10 (Official Format)
+                                    </NavLink>
                                     <NavLink to="/toeic-speaking" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsSpeakingDropdownOpen(false)}>
                                         <span className="w-2 h-2 bg-gray-400 rounded-full mr-3"></span>
                                         Complete Test
@@ -530,6 +665,38 @@ const Header: React.FC = () => {
                                     <div className="px-4 py-2 text-xs font-bold text-blue-600 uppercase tracking-wider border-b border-blue-100 mb-2 mt-3">
                                         TOEIC Writing
                                     </div>
+                                    <NavLink to="/toeic-writing-full-test1" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 1 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-writing-full-test2" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 2 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-writing-full-test3" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 3 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-writing-full-test4" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 4 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-writing-full-test5" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 5 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-writing-full-test6" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 6 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-writing-full-test8" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 8 (Official Format)
+                                    </NavLink>
+                                    <NavLink to="/toeic-writing-full-test9" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
+                                        <span className="w-2 h-2 bg-purple-400 rounded-full mr-3"></span>
+                                        Full Test 9 (Official Format)
+                                    </NavLink>
                                     <NavLink to="/toeic-writing-task1" className="flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors duration-200 rounded-lg mx-2" onClick={() => setIsWritingDropdownOpen(false)}>
                                         <span className="w-2 h-2 bg-blue-400 rounded-full mr-3"></span>
                                         Task 1 - Picture Description
@@ -547,8 +714,9 @@ const Header: React.FC = () => {
                         </div>
 
 						<>
-							{currentUser?.role === 'Admin' && (
-							<NavLink to="/admin" className={aioNavLinkClasses}>Admin</NavLink>
+							{/* Admin link - links to standalone admin portal */}
+							{(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && (
+								<a href="/admin.html" className={aioNavLinkClasses} title="Admin Portal">Admin</a>
 							)}
 						</>
 					</div>
@@ -572,7 +740,10 @@ const Header: React.FC = () => {
 										>
 											{currentUser.name.charAt(0).toUpperCase()}
 										</div>
-										<BananaBalanceDisplay />
+										<div className="flex items-center gap-2">
+											<BananaBalanceDisplay />
+											<ScoreDisplay />
+										</div>
 									</button>
 									{isUserMenuOpen && (
 										<div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 ring-1 ring-black ring-opacity-5">
@@ -594,7 +765,10 @@ const Header: React.FC = () => {
 								</div>
 							) : (
 								<div className="flex items-center gap-4">
-									<BananaBalanceDisplay />
+									<div className="flex items-center gap-2">
+										<BananaBalanceDisplay />
+										<ScoreDisplay />
+									</div>
 									<NavLink to="/login" className="header-nav-item header-nav-item--login">
 										Đăng nhập
 									</NavLink>
@@ -669,6 +843,16 @@ const Header: React.FC = () => {
 									<NavLink to="/ielts-speaking-part3" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Part 3 - Discussion</NavLink>
 									
 									<div className="text-xs font-semibold text-gray-200 uppercase tracking-wider mb-1 mt-3">TOEIC</div>
+									<NavLink to="/toeic-speaking-full-test1" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 1 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test2" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 2 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test3" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 3 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test4" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 4 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test5" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 5 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test6" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 6 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test7" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 7 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test8" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 8 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test9" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 9 (Official)</NavLink>
+									<NavLink to="/toeic-speaking-full-test10" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 10 (Official)</NavLink>
 									<NavLink to="/toeic-speaking" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Complete Test</NavLink>
 									<NavLink to="/toeic-speaking-questions1-2" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Q1-2 - Read Aloud</NavLink>
 									<NavLink to="/toeic-speaking-questions3-4" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Q3-4 - Describe Picture</NavLink>
@@ -706,6 +890,14 @@ const Header: React.FC = () => {
 							<div className="px-3 py-1.5">
 								<div className="text-xs font-semibold text-gray-200 uppercase tracking-wider mb-2">TOEIC Writing</div>
 								<div className="pl-4 space-y-1">
+                            <NavLink to="/toeic-writing-full-test1" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 1 (Official)</NavLink>
+                            <NavLink to="/toeic-writing-full-test2" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 2 (Official)</NavLink>
+                            <NavLink to="/toeic-writing-full-test3" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 3 (Official)</NavLink>
+                            <NavLink to="/toeic-writing-full-test4" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 4 (Official)</NavLink>
+                            <NavLink to="/toeic-writing-full-test5" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 5 (Official)</NavLink>
+                            <NavLink to="/toeic-writing-full-test6" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 6 (Official)</NavLink>
+                            <NavLink to="/toeic-writing-full-test8" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 8 (Official)</NavLink>
+                            <NavLink to="/toeic-writing-full-test9" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Full Test 9 (Official)</NavLink>
                             <NavLink to="/toeic-writing-task1" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Task 1 - Picture Description</NavLink>
                             <NavLink to="/toeic-writing-task2" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Task 2 - Email Response</NavLink>
                             <NavLink to="/toeic-writing-task3" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Task 3 - Opinion Essay</NavLink>
@@ -713,8 +905,9 @@ const Header: React.FC = () => {
 							</div>
 							
 							<>
-								{currentUser?.role === 'Admin' && (
-								<NavLink to="/admin" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)}>Admin</NavLink>
+								{/* Admin link - links to standalone admin portal */}
+								{(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && (
+									<a href="/admin.html" className={mobileNavLinkClasses} onClick={() => setIsMobileMenuOpen(false)} title="Admin Portal">Admin</a>
 								)}
 							</>
 						</div>
@@ -729,12 +922,18 @@ const Header: React.FC = () => {
 											</div>
 										</div>
 									</div>
-									<BananaBalanceDisplay isMobile={true} />
+									<div className="flex items-center gap-2">
+										<BananaBalanceDisplay isMobile={true} />
+										<ScoreDisplay isMobile={true} />
+									</div>
 								</div>
 							 ) : (
 								 <div className="flex items-center justify-between px-4">
 									<span className="text-base font-medium text-white">Chào mừng bạn!</span>
-									<BananaBalanceDisplay isMobile={true} />
+									<div className="flex items-center gap-2">
+										<BananaBalanceDisplay isMobile={true} />
+										<ScoreDisplay isMobile={true} />
+									</div>
 								</div>
 							 ) }
 							 <div className="mt-3 px-2 space-y-1">
@@ -891,6 +1090,7 @@ const Header: React.FC = () => {
 				</div>
 			)}
 		</header>
+		</>
 	);
 };
 

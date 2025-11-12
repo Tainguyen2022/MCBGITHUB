@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { User } from './types';
@@ -8,6 +7,7 @@ import GrammarPage from './pages/GrammarPage';
 import TipsPage from './pages/TipsPage';
 import Mtest from './pages/Mtest';
 import TOEICPart5ByYear from './pages/TOEICPart5ByYear';
+import TOEICPart6ByYear from './pages/TOEICPart6ByYear';
 import TOEICPart7ByYear from './pages/TOEICPart7ByYear';
 import TOEICPart7EmailReading from './pages/TOEICPart7EmailReading';
 import TOEICPart7EmailList from './pages/TOEICPart7EmailList';
@@ -379,15 +379,58 @@ import RegisterPage from './pages/RegisterPage';
 import Header from './components/Header';
 import CambridgePracticePage from './pages/CambridgePracticePage';
 import BananaAchievements from './pages/BananaAchievements';
-import AdminPage from './pages/AdminPage'; // NEW: Admin Page
 import ProfilePage from './pages/ProfilePage'; // NEW: Profile Page
 
 // Protected Route Component for Admin
+// 🔒 SECURITY: Enhanced admin route protection with logging
 const ProtectedRoute: React.FC<{ children: React.ReactNode; requiredRole?: string }> = ({ children, requiredRole = 'Admin' }) => {
     const { currentUser } = useAuth();
+    const navigate = useNavigate();
+    const location = useLocation();
+    
+    useEffect(() => {
+        if (!currentUser || currentUser.role !== requiredRole) {
+            // 🔒 SECURITY: Log unauthorized access attempts
+            console.warn('⚠️ [SECURITY] Unauthorized access attempt to admin route:', {
+                userId: currentUser?.id,
+                userRole: currentUser?.role,
+                requiredRole,
+                path: location.pathname,
+                timestamp: new Date().toISOString()
+            });
+            
+            // 🔒 SECURITY: Log to server (optional - can be added to backend)
+            try {
+                fetch('/api/admin-access-log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: currentUser?.id,
+                        userRole: currentUser?.role,
+                        requiredRole,
+                        action: 'unauthorized_access_attempt',
+                        path: location.pathname,
+                        timestamp: new Date().toISOString()
+                    })
+                }).catch(() => {}); // Silent fail - don't block redirect
+            } catch (e) {
+                // Silent fail
+            }
+            
+            navigate('/grammar', { replace: true });
+        } else {
+            // 🔒 SECURITY: Log successful admin access
+            console.log('✅ [SECURITY] Admin access granted:', {
+                userId: currentUser.id,
+                userRole: currentUser.role,
+                path: location.pathname,
+                timestamp: new Date().toISOString()
+            });
+        }
+    }, [currentUser, requiredRole, navigate, location.pathname]);
     
     if (!currentUser || currentUser.role !== requiredRole) {
-        return <Navigate to="/grammar" replace />;
+        return null; // Don't render anything while redirecting
     }
     
     return <>{children}</>;
@@ -405,6 +448,7 @@ const ProtectedTestHubRoute: React.FC<{ children: React.ReactNode }> = ({ childr
     
     return <>{children}</>;
 };
+
 import AddBananasPage from './pages/AddBananasPage'; // NEW: Add Bananas Page
 import FilesBrowserPage from './pages/FilesBrowserPage'; // NEW: Files Browser Page
 import VocaHubNew from './pages/VocaHubNew';
@@ -433,6 +477,24 @@ import TOEICSpeakingQuestions3_4 from './pages/TOEICSpeakingQuestions3-4'; // NE
 import TOEICSpeakingQuestions5_7 from './pages/TOEICSpeakingQuestions5-7'; // NEW: TOEIC Speaking Questions 5-7
 import TOEICSpeakingQuestions8_10 from './pages/TOEICSpeakingQuestions8-10'; // NEW: TOEIC Speaking Questions 8-10
 import TOEICSpeakingQuestion11 from './pages/TOEICSpeakingQuestion11'; // NEW: TOEIC Speaking Question 11
+import TOEICSpeakingFullTest1 from './pages/TOEICSpeakingFullTest1'; // NEW: TOEIC Speaking Full Test 1
+import TOEICSpeakingFullTest2 from './pages/TOEICSpeakingFullTest2'; // NEW: TOEIC Speaking Full Test 2
+import TOEICSpeakingFullTest3 from './pages/TOEICSpeakingFullTest3'; // NEW: TOEIC Speaking Full Test 3
+import TOEICSpeakingFullTest4 from './pages/TOEICSpeakingFullTest4'; // NEW: TOEIC Speaking Full Test 4
+import TOEICSpeakingFullTest5 from './pages/TOEICSpeakingFullTest5'; // NEW: TOEIC Speaking Full Test 5
+import TOEICSpeakingFullTest6 from './pages/TOEICSpeakingFullTest6'; // NEW: TOEIC Speaking Full Test 6
+import TOEICSpeakingFullTest7 from './pages/TOEICSpeakingFullTest7'; // NEW: TOEIC Speaking Full Test 7
+import TOEICSpeakingFullTest8 from './pages/TOEICSpeakingFullTest8'; // NEW: TOEIC Speaking Full Test 8
+import TOEICSpeakingFullTest9 from './pages/TOEICSpeakingFullTest9'; // NEW: TOEIC Speaking Full Test 9
+import TOEICSpeakingFullTest10 from './pages/TOEICSpeakingFullTest10'; // NEW: TOEIC Speaking Full Test 10
+import TOEICWritingFullTest1 from './pages/TOEICWritingFullTest1'; // NEW: TOEIC Writing Full Test 1
+import TOEICWritingFullTest2 from './pages/TOEICWritingFullTest2'; // NEW: TOEIC Writing Full Test 2
+import TOEICWritingFullTest3 from './pages/TOEICWritingFullTest3'; // NEW: TOEIC Writing Full Test 3
+import TOEICWritingFullTest4 from './pages/TOEICWritingFullTest4'; // NEW: TOEIC Writing Full Test 4
+import TOEICWritingFullTest5 from './pages/TOEICWritingFullTest5'; // NEW: TOEIC Writing Full Test 5
+import TOEICWritingFullTest6 from './pages/TOEICWritingFullTest6'; // NEW: TOEIC Writing Full Test 6
+import TOEICWritingFullTest8 from './pages/TOEICWritingFullTest8'; // NEW: TOEIC Writing Full Test 8
+import TOEICWritingFullTest9 from './pages/TOEICWritingFullTest9'; // NEW: TOEIC Writing Full Test 9
 import VSTEPSpeaking from './pages/VSTEPSpeaking'; // NEW: VSTEP Speaking
 import VSTEPSpeakingPart1 from './pages/VSTEPSpeakingPart1'; // NEW: VSTEP Speaking Part 1
 import VSTEPSpeakingPart2 from './pages/VSTEPSpeakingPart2'; // NEW: VSTEP Speaking Part 2
@@ -476,8 +538,10 @@ import GrammarLesson from './pages/GrammarLesson';
 
 // Auth Context moved out to break circular imports
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ScoreAnimationProvider } from './contexts/ScoreAnimationContext';
 // Re-export to maintain backward compatibility for modules importing from '../App'
 export { useAuth } from './contexts/AuthContext';
+export { useScoreAnimation } from './contexts/ScoreAnimationContext';
 
 const ScrollToTop = () => {
   const { pathname } = useLocation();
@@ -536,6 +600,7 @@ const AppLayout: React.FC = () => {
                     <Route path="/tips" element={<TipsPage />} />
                     <Route path="/mtest" element={<ProtectedTestHubRoute><Mtest /></ProtectedTestHubRoute>} />
                     <Route path="/toeic-part5-by-year" element={<TOEICPart5ByYear />} />
+                    <Route path="/toeic-part6-by-year" element={<TOEICPart6ByYear />} />
                     <Route path="/toeic-part7-by-year" element={<TOEICPart7ByYear />} />
                     <Route path="/toeic-part7-email-list" element={<TOEICPart7EmailList />} />
                     <Route path="/toeic-part7-double-list" element={<TOEICPart7DoubleList />} />
@@ -914,11 +979,7 @@ const AppLayout: React.FC = () => {
                     <Route path="/cambridge-practice/:exam/:partId" element={<CambridgePracticePage />} />
                     <Route path="/banana-achievements" element={<BananaAchievements />} />
                     <Route path="/add-bananas" element={<AddBananasPage />} />
-                    <Route path="/admin" element={
-                        <ProtectedRoute requiredRole="Admin">
-                            <AdminPage />
-                        </ProtectedRoute>
-                    } />
+                    {/* Admin portal is now standalone at /admin.html - routes removed from main app */}
                     <Route path="/files" element={<FilesBrowserPage />} />
                 <Route path="/voca-hub" element={<VocaHubNew />} />
                 <Route path="/ielts-writing-task1-vocabulary" element={<IELTSWritingTask1Vocabulary />} />
@@ -949,6 +1010,24 @@ const AppLayout: React.FC = () => {
                 <Route path="/toeic-speaking-questions5-7" element={<TOEICSpeakingQuestions5_7 />} />
                 <Route path="/toeic-speaking-questions8-10" element={<TOEICSpeakingQuestions8_10 />} />
                 <Route path="/toeic-speaking-question11" element={<TOEICSpeakingQuestion11 />} />
+                <Route path="/toeic-speaking-full-test1" element={<TOEICSpeakingFullTest1 />} />
+                <Route path="/toeic-speaking-full-test2" element={<TOEICSpeakingFullTest2 />} />
+                <Route path="/toeic-speaking-full-test3" element={<TOEICSpeakingFullTest3 />} />
+                <Route path="/toeic-speaking-full-test4" element={<TOEICSpeakingFullTest4 />} />
+                <Route path="/toeic-speaking-full-test5" element={<TOEICSpeakingFullTest5 />} />
+                <Route path="/toeic-speaking-full-test6" element={<TOEICSpeakingFullTest6 />} />
+                <Route path="/toeic-speaking-full-test7" element={<TOEICSpeakingFullTest7 />} />
+                <Route path="/toeic-speaking-full-test8" element={<TOEICSpeakingFullTest8 />} />
+                <Route path="/toeic-speaking-full-test9" element={<TOEICSpeakingFullTest9 />} />
+                <Route path="/toeic-speaking-full-test10" element={<TOEICSpeakingFullTest10 />} />
+                <Route path="/toeic-writing-full-test1" element={<TOEICWritingFullTest1 />} />
+                <Route path="/toeic-writing-full-test2" element={<TOEICWritingFullTest2 />} />
+                <Route path="/toeic-writing-full-test3" element={<TOEICWritingFullTest3 />} />
+                <Route path="/toeic-writing-full-test4" element={<TOEICWritingFullTest4 />} />
+                <Route path="/toeic-writing-full-test5" element={<TOEICWritingFullTest5 />} />
+                <Route path="/toeic-writing-full-test6" element={<TOEICWritingFullTest6 />} />
+                <Route path="/toeic-writing-full-test8" element={<TOEICWritingFullTest8 />} />
+                <Route path="/toeic-writing-full-test9" element={<TOEICWritingFullTest9 />} />
                 <Route path="/vstep-speaking" element={<VSTEPSpeaking />} />
                 <Route path="/vstep-speaking-part1" element={<VSTEPSpeakingPart1 />} />
                 <Route path="/vstep-speaking-part2" element={<VSTEPSpeakingPart2 />} />
@@ -999,6 +1078,7 @@ const AppLayout: React.FC = () => {
 function App() {
     return (
         <AuthProvider>
+          <ScoreAnimationProvider>
             <HashRouter
                 future={{
                     v7_startTransition: true,
@@ -1006,7 +1086,8 @@ function App() {
                 }}
             >
                 <AppLayout />
-            </HashRouter>
+                </HashRouter>
+            </ScoreAnimationProvider>
         </AuthProvider>
     );
 }
