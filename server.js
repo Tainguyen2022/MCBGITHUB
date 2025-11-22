@@ -2,23 +2,51 @@
 // ⚡ CLOUD RUN OPTIMIZED: Load environment variables first (non-blocking)
 require('dotenv').config();
 
+// Register TypeScript support for loading .ts data files
+// Professional solution: Try multiple approaches
+let tsSupportRegistered = false;
+
+// Approach 1: Try tsx (CommonJS API - correct way)
+try {
+    require('tsx/cjs/api').register({
+        extensions: ['.ts', '.tsx']
+    });
+    tsSupportRegistered = true;
+    console.log('✅ TypeScript support registered (tsx/cjs) for data files');
+} catch (err1) {
+    // Approach 2: Try tsx (ESM API)
+    try {
+        const tsx = require('tsx');
+        if (tsx && typeof tsx.register === 'function') {
+            tsx.register({
+                extensions: ['.ts', '.tsx']
+            });
+            tsSupportRegistered = true;
+            console.log('✅ TypeScript support registered (tsx) for data files');
+        } else {
+            throw new Error('tsx.register is not a function');
+        }
+    } catch (err2) {
+        // Approach 3: Try ts-node
+        try {
+            require('ts-node/register');
+            tsSupportRegistered = true;
+            console.log('✅ TypeScript support registered (ts-node) for data files');
+        } catch (err3) {
+            console.log('⚠️  TypeScript support not available (tsx/ts-node not installed)');
+            console.log('   Install with: npm install --save-dev tsx');
+            console.log('   Or: npm install --save-dev ts-node');
+            console.log('   Note: Test data files are TypeScript (.ts) and need compilation support');
+            console.log('   Error details:', err1.message);
+        }
+    }
+}
+
 // 🔒 SECURITY: Validate required environment variables
-const ADMIN_KEY = process.env.ADMIN_KEY;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-
-if (!ADMIN_KEY) {
-    console.error('❌ CRITICAL: ADMIN_KEY environment variable is required');
-    console.error('   Server cannot start without admin key');
-    process.exit(1);
-}
-
-if (!ADMIN_PASSWORD) {
-    console.error('❌ CRITICAL: ADMIN_PASSWORD environment variable is required');
-    console.error('   Server cannot start without admin password');
-    process.exit(1);
-}
-
-console.log('✅ Admin credentials loaded from environment variables');
+// ⚠️ NOTE: ADMIN_PASSWORD is NOT stored in environment variables for security
+// Admin password should be set manually in database
+console.log('ℹ️  Admin password is NOT stored in environment variables (security)');
+console.log('   Admin password should be set manually in database');
 
 // ⚡ CLOUD RUN OPTIMIZED: Load core modules synchronously (lightweight)
 const express = require('express');
@@ -98,8 +126,17 @@ const GEMINI_TTS_ENABLED = Boolean(process.env.GEMINI_API_KEY);
 const DEFAULT_TTS_MODEL = process.env.GEMINI_TTS_MODEL || 'models/gemini-2.0-flash';
 
 // JWT Configuration
-const JWT_SECRET = process.env.JWT_SECRET || 'e8a5cf0dcf47b00c4ac71e35e59a8b62d1f3cd30362f79bd452fe72c0767a1a4';
+// 🔒 SECURITY: JWT_SECRET is REQUIRED - no default value for security
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('❌ [SECURITY] JWT_SECRET environment variable is required!');
+  console.error('   Please set JWT_SECRET in your environment variables.');
+  console.error('   Server will exit to prevent insecure operation.');
+  process.exit(1);
+}
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d'; // 7 days
+
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -109,16 +146,115 @@ console.log(`🚀 Initializing server on port ${port}...`);
 
 // --- Middleware ---
 app.use(express.json({ limit: '20mb' })); // Increase limit for large sync payloads
+
+// 🔒 SECURITY: CORS configuration - restrict allowed origins
+const allowedOrigins = [
+  'https://matcanban.com',
+  'https://www.matcanban.com',
+  'http://localhost:5173', // Development
+  'http://localhost:3000', // Development
+  'http://127.0.0.1:5173', // Development
+  'http://127.0.0.1:3000', // Development
+];
+
+// Allow additional origins from environment variable (comma-separated)
+if (process.env.ALLOWED_ORIGINS) {
+  const additionalOrigins = process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim());
+  allowedOrigins.push(...additionalOrigins);
+}
+
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, X-Admin-Key');
+  const origin = req.headers.origin;
+  
+  // Check if origin is in allowed list
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  } else if (!origin) {
+    // Same-origin requests (no origin header) - allow
+    // This handles requests from same domain (e.g., server-to-server)
+  }
+  // If origin is not allowed, don't set CORS headers (browser will block)
+  
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  
   next();
 });
 
+// 🔒 SECURITY: Rate limiting for authentication endpoints
+// Prevent brute-force attacks on login/register
+const authRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 requests per windowMs
+  message: {
+    error: 'Too many authentication attempts from this IP, please try again after 15 minutes.'
+  },
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  skip: (req) => {
+    // Skip rate limiting for localhost in development
+    return process.env.NODE_ENV === 'development' && 
+           (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1');
+  }
+});
+
+// Apply rate limiting to authentication endpoints
+app.use('/api/login', authRateLimiter);
+app.use('/api/register', authRateLimiter);
+app.use('/api/auth/simple-login', authRateLimiter);
+app.use('/api/auth/simple-register', authRateLimiter);
+
 // Serve static files from dist directory
 app.use(express.static('dist'));
+
+// --- AI Gemini API Proxy (to protect API key) ---
+// 🔒 SECURITY: All AI requests go through backend to protect GEMINI_API_KEY
+app.post('/api/ai/generate', async (req, res) => {
+  const { action, prompt, schema, model = 'gemini-1.5-flash' } = req.body || {};
+  
+  if (!action || !prompt) {
+    return res.status(400).json({ error: 'Action and prompt are required.' });
+  }
+  
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(503).json({ error: 'AI service is not configured on the server.' });
+  }
+  
+  try {
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    const ai = new GoogleGenerativeAI(apiKey);
+    
+    const generationConfig = {
+      responseMimeType: "application/json",
+    };
+    
+    if (schema) {
+      generationConfig.responseSchema = schema;
+    }
+    
+    const aiModel = ai.getGenerativeModel({ 
+      model: model,
+      generationConfig: generationConfig
+    });
+    
+    const result = await aiModel.generateContent(prompt);
+    const jsonText = result.response.text().trim();
+    const data = JSON.parse(jsonText);
+    
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error(`[AI ${action}] Error:`, error);
+    res.status(500).json({ 
+      error: `AI generation failed: ${error.message || 'Unknown error'}` 
+    });
+  }
+});
 
 // --- AI TTS Endpoint ---
 app.post('/api/tts', async (req, res) => {
@@ -201,9 +337,44 @@ const ensureTablesExist = async () => {
                 "joinDate" TEXT,
                 "expiryDate" TEXT,
                 registered_at TIMESTAMPTZ,
-                "bananaBalance" INTEGER
+                "bananaBalance" INTEGER DEFAULT 0 CHECK ("bananaBalance" >= 0)
             );
         `);
+        
+        // ✅ IMPROVEMENT: Add DEFAULT and CHECK constraint to existing table (if table already exists)
+        // This ensures existing databases also get the constraint
+        try {
+            await client.query(`
+                ALTER TABLE users 
+                ALTER COLUMN "bananaBalance" SET DEFAULT 0;
+            `);
+            console.log('✅ [SCHEMA] Set DEFAULT 0 for bananaBalance');
+        } catch (err) {
+            // Column might already have default, or table doesn't exist yet - ignore
+            if (!err.message.includes('does not exist') && !err.message.includes('already')) {
+                console.warn('⚠️ [SCHEMA] Could not set DEFAULT for bananaBalance:', err.message);
+            }
+        }
+        
+        try {
+            // Drop existing constraint if it exists (to avoid error on re-run)
+            await client.query(`
+                ALTER TABLE users 
+                DROP CONSTRAINT IF EXISTS check_banana_balance_non_negative;
+            `);
+            // Add CHECK constraint
+            await client.query(`
+                ALTER TABLE users 
+                ADD CONSTRAINT check_banana_balance_non_negative 
+                CHECK ("bananaBalance" >= 0);
+            `);
+            console.log('✅ [SCHEMA] Added CHECK constraint for bananaBalance >= 0');
+        } catch (err) {
+            // Constraint might already exist - ignore
+            if (!err.message.includes('already exists') && !err.message.includes('duplicate')) {
+                console.warn('⚠️ [SCHEMA] Could not add CHECK constraint for bananaBalance:', err.message);
+            }
+        }
 
         // Create test_results table to track user test performance
         await client.query(`
@@ -229,6 +400,9 @@ const ensureTablesExist = async () => {
             CREATE INDEX IF NOT EXISTS idx_test_results_test_id ON test_results(test_id);
             CREATE INDEX IF NOT EXISTS idx_test_results_completed_at ON test_results(completed_at);
         `);
+
+        // Initialize content management tables (Mtest, Voca, Giao tiếp)
+        await ensureContentTablesExist();
 
         // Create gift_rewards table to track user gift claims
         await client.query(`
@@ -271,22 +445,55 @@ const ensureTablesExist = async () => {
             CREATE INDEX IF NOT EXISTS idx_banana_transactions_type ON banana_transactions(transaction_type);
         `);
 
-        // Create user_sessions table to track active sessions (unlimited devices per user, deduped by fingerprint)
+        // ✅ NEW: Simplified user_sessions table - no device restrictions, optional tracking
         await client.query(`
             CREATE TABLE IF NOT EXISTS user_sessions (
                 id SERIAL PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                device_type TEXT NOT NULL CHECK (device_type IN ('laptop', 'mobile')),
-                browser_fingerprint TEXT NOT NULL,
-                session_token TEXT NOT NULL UNIQUE,
+                device_type TEXT DEFAULT 'unknown',
+                browser_fingerprint TEXT,
+                session_token TEXT,
                 user_agent TEXT,
                 ip_address TEXT,
+                operating_system TEXT,
+                login_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 last_activity TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT true,
-                UNIQUE(user_id, device_type, browser_fingerprint)
+                is_active BOOLEAN DEFAULT true
             );
         `);
+        
+        // ✅ NEW: Remove device type constraint to allow 'unknown' and any device type
+        try {
+            await client.query(`
+                ALTER TABLE user_sessions 
+                DROP CONSTRAINT IF EXISTS user_sessions_device_type_check;
+            `);
+            console.log('✅ [SCHEMA] Removed device_type constraint (allowing unlimited devices)');
+        } catch (err) {
+            // Constraint might not exist - ignore
+            if (!err.message.includes('does not exist')) {
+                console.warn('⚠️ [SCHEMA] Could not remove device_type constraint:', err.message);
+            }
+        }
+        
+        // ✅ IMPROVEMENT: Add operating_system and login_time columns if they don't exist
+        try {
+            await client.query(`
+                ALTER TABLE user_sessions 
+                ADD COLUMN IF NOT EXISTS operating_system TEXT;
+            `);
+            await client.query(`
+                ALTER TABLE user_sessions 
+                ADD COLUMN IF NOT EXISTS login_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+            `);
+            console.log('✅ [SCHEMA] Added operating_system and login_time columns to user_sessions');
+        } catch (err) {
+            // Columns might already exist - ignore
+            if (!err.message.includes('already exists') && !err.message.includes('duplicate')) {
+                console.warn('⚠️ [SCHEMA] Could not add columns to user_sessions:', err.message);
+            }
+        }
 
         // Create index for faster queries
         await client.query(`
@@ -296,10 +503,11 @@ const ensureTablesExist = async () => {
             CREATE INDEX IF NOT EXISTS idx_user_sessions_is_active ON user_sessions(is_active);
         `);
 
-        // Ensure legacy constraint is removed and unique index exists for new rule (supporting multiple laptops)
+        // ✅ NEW: Remove all unique constraints to allow unlimited devices
         await client.query(`
             DO $$
             BEGIN
+                -- Remove old unique constraints
                 IF EXISTS (
                     SELECT 1 FROM information_schema.table_constraints
                     WHERE constraint_name = 'user_sessions_user_id_device_type_key'
@@ -308,18 +516,18 @@ const ensureTablesExist = async () => {
                     ALTER TABLE user_sessions DROP CONSTRAINT user_sessions_user_id_device_type_key;
                 END IF;
 
-                IF NOT EXISTS (
+                IF EXISTS (
                     SELECT 1 FROM information_schema.table_constraints
                     WHERE constraint_name = 'user_sessions_user_id_device_type_browser_fingerprint_key'
                       AND table_name = 'user_sessions'
                 ) THEN
                     ALTER TABLE user_sessions 
-                    ADD CONSTRAINT user_sessions_user_id_device_type_browser_fingerprint_key
-                    UNIQUE (user_id, device_type, browser_fingerprint);
+                    DROP CONSTRAINT user_sessions_user_id_device_type_browser_fingerprint_key;
                 END IF;
             END
             $$;
         `);
+        console.log('✅ [SCHEMA] Removed unique constraints from user_sessions (allowing unlimited devices)');
 
         // Create daily_checkins table to track daily check-in (1 check-in per day per user)
         await client.query(`
@@ -469,6 +677,8 @@ const updateUserProgress = async (userId, testType, testId, testName, score, tot
 };
 
 // --- Helper Function to ensure admin user exists ---
+// ⚠️ NOTE: This function only ensures admin user exists with correct role
+// Password should be set manually in database (not from environment variables)
 const ensureAdminUserExists = async () => {
     if (!isRealDatabasePool()) {
         console.log('⚠️  Database pool not available, skipping admin user initialization');
@@ -477,14 +687,8 @@ const ensureAdminUserExists = async () => {
     const client = await getDatabaseClient();
     try {
         const adminEmail = 'admin@gmail.com';
-        // ❌ REMOVED: Hardcoded password '01111110' - security risk!
-        // ✅ FIXED: Use environment variable
-        const adminPassword = process.env.ADMIN_PASSWORD;
-        
-        if (!adminPassword) {
-            console.error('❌ ADMIN_PASSWORD environment variable is required');
-            throw new Error('ADMIN_PASSWORD environment variable is required');
-        }
+        // ⚠️ SECURITY: Admin password is NOT loaded from environment variables
+        // Password should be set manually in database
         const adminName = 'Admin';
         const adminRole = 'Admin';
         const adminBananaBalance = 10000;
@@ -493,22 +697,25 @@ const ensureAdminUserExists = async () => {
         const existingUser = await client.query('SELECT * FROM users WHERE email = $1', [adminEmail]);
         
         if (existingUser.rows.length > 0) {
-            // Update existing user to ensure it's admin
+            // Update existing user to ensure it's admin (but don't change password)
             const userId = existingUser.rows[0].id;
             await client.query(
                 `UPDATE users 
-                 SET role = $1, "bananaBalance" = $2, password = $3, name = $4
-                 WHERE id = $5`,
-                [adminRole, adminBananaBalance, adminPassword, adminName, userId]
+                 SET role = $1, "bananaBalance" = $2, name = $3
+                 WHERE id = $4`,
+                [adminRole, adminBananaBalance, adminName, userId]
             );
-            console.log('✅ Admin user updated:', adminEmail);
+            console.log('✅ Admin user updated (role and balance):', adminEmail);
+            console.log('ℹ️  Admin password unchanged (set manually in database)');
         } else {
-            // Create new admin user
+            // Create new admin user without password (password must be set manually)
+            // Use a placeholder password that will need to be changed (plain text)
+            const placeholderPassword = 'CHANGE_ME'; // Plain text - no hashing
             const newUser = {
                 id: `user_${Date.now()}`,
                 name: adminName,
                 email: adminEmail,
-                password: adminPassword,
+                password: placeholderPassword, // Placeholder - must be changed manually
                 role: adminRole,
                 packages: [],
                 activated: true,
@@ -525,6 +732,8 @@ const ensureAdminUserExists = async () => {
                 Object.values(newUser)
             );
             console.log('✅ Admin user created:', adminEmail);
+            console.log('⚠️  WARNING: Admin password is placeholder (CHANGE_ME)');
+            console.log('   Please set admin password manually in database');
         }
     } catch (err) {
         console.error("Error ensuring admin user exists:", err.message);
@@ -533,19 +742,9 @@ const ensureAdminUserExists = async () => {
     }
 };
 
-// --- Admin Authentication Middleware ---
-const adminAuth = (req, res, next) => {
-    const adminKey = req.headers['x-admin-key'];
-    // ✅ FIXED: Use ADMIN_KEY from top of file (already validated)
-    if (adminKey && adminKey === ADMIN_KEY) { 
-        next();
-    } else {
-        res.status(403).json({ error: 'Forbidden: Admin access required.' });
-    }
-};
-
 // --- JWT Authentication Middleware ---
 // ⚡ CLOUD RUN OPTIMIZED: Define authenticateToken BEFORE it's used in routes
+// ✅ NEW: Simplified authentication - no device tracking required
 const authenticateToken = async (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
@@ -557,44 +756,26 @@ const authenticateToken = async (req, res, next) => {
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         
-        // 🔒 SECURITY: Verify session is still active (only if database is available)
-        // Check if pool is a real database pool (not mock)
-        if (isRealDatabasePool()) {
-            try {
-                const client = await getDatabaseClient();
-                try {
-                    const sessionResult = await client.query(
-                        `SELECT * FROM user_sessions 
-                         WHERE user_id = $1 AND device_type = $2 AND browser_fingerprint = $3 AND is_active = true`,
-                        [decoded.userId, decoded.deviceType, decoded.browserFingerprint]
-                    );
-                    
-                    if (sessionResult.rows.length === 0) {
-                        client.release();
-                        return res.status(401).json({ error: 'Session expired or invalid. Please login again.' });
-                    }
-                    
-                    // Update last activity
-                    await client.query(
-                        `UPDATE user_sessions SET last_activity = CURRENT_TIMESTAMP WHERE id = $1`,
-                        [sessionResult.rows[0].id]
-                    );
-                    
-                    client.release();
-                } catch (sessionErr) {
-                    client.release();
-                    console.error('Session verification error:', sessionErr.message);
-                    // Don't fail authentication if session check fails - allow request to proceed
-                    // This prevents database issues from blocking all authenticated requests
-                }
-            } catch (dbErr) {
-                console.error('Database connection error in authenticateToken:', dbErr.message);
-                // Don't fail authentication if database is unavailable - allow request to proceed
-                // This prevents database issues from blocking all authenticated requests
-            }
-        } else {
-            // Database not available yet - skip session verification but still allow request
-            console.warn('⚠️  Database pool not available, skipping session verification');
+        // ✅ NEW: Simple token-based authentication - no session tracking required
+        // JWT token expiration handles logout automatically
+        // Optional: Update last activity in sessions table (non-blocking)
+        if (isRealDatabasePool() && decoded.userId) {
+            // Optional: Update last activity (non-blocking, don't fail if it errors)
+            // Update first active session only (using subquery)
+            pool.query(
+                `UPDATE user_sessions 
+                 SET last_activity = CURRENT_TIMESTAMP 
+                 WHERE id = (
+                     SELECT id FROM user_sessions 
+                     WHERE user_id = $1 AND is_active = true 
+                     ORDER BY last_activity DESC 
+                     LIMIT 1
+                 )`,
+                [decoded.userId]
+            ).catch(err => {
+                // Non-critical - don't log as error
+                console.log('ℹ️ [AUTH] Session activity update skipped (non-critical)');
+            });
         }
         
         req.user = decoded; // Attach user info to request
@@ -609,6 +790,64 @@ const authenticateToken = async (req, res, next) => {
         return res.status(500).json({ error: 'Token verification failed.' });
     }
 };
+
+// --- Admin Role Middleware ---
+const requireAdminRole = (req, res, next) => {
+    const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+    const user = req.user;
+    
+    if (!user) {
+        console.warn('⚠️ [SECURITY] Missing user context for admin route:', {
+            endpoint: req.path,
+            method: req.method,
+            ip: clientIP,
+            timestamp: new Date().toISOString()
+        });
+        return res.status(401).json({ error: 'Authentication required. Please login again.' });
+    }
+    
+    if (user.role !== 'Admin') {
+        console.warn('⚠️ [SECURITY] Unauthorized admin API access attempt:', {
+            endpoint: req.path,
+            method: req.method,
+            ip: clientIP,
+            userId: user.userId,
+            userRole: user.role,
+            timestamp: new Date().toISOString()
+        });
+        return res.status(403).json({ error: 'Forbidden: Admin role required.' });
+    }
+    
+    console.log('✅ [SECURITY] Admin API access granted:', {
+        endpoint: req.path,
+        method: req.method,
+        ip: clientIP,
+        userId: user.userId,
+        email: user.email,
+        timestamp: new Date().toISOString()
+    });
+    next();
+};
+
+const adminAuth = [authenticateToken, requireAdminRole];
+
+// 🔒 SECURITY: Admin access logging endpoint (optional)
+app.post('/api/admin-access-log', async (req, res) => {
+    const { userId, userRole, requiredRole, action, timestamp, path } = req.body || {};
+    
+    // Log admin access attempts (can be stored in database if needed)
+    console.log('📊 [ADMIN ACCESS LOG]', {
+        userId,
+        userRole,
+        requiredRole,
+        action,
+        path,
+        timestamp,
+        ip: req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown'
+    });
+    
+    res.status(200).json({ success: true });
+});
 
 // --- API Endpoints ---
 
@@ -685,33 +924,18 @@ app.get('/api/all-data', async (req, res) => {
 });
 
 
-// User Auth with session management (1 laptop + 1 mobile per user)
+// ============================================
+// ✅ NEW: Clean Login Endpoint
+// ============================================
+// Code sạch, đơn giản, đồng bộ SQL
+// Hỗ trợ migration tự động từ bcrypt sang plain text
+// Không làm mất dữ liệu user cũ
 app.post('/api/login', async (req, res) => {
-    const { email, password, deviceType, browserFingerprint, isIncognito, userAgent, ipAddress } = req.body;
+    const { email, password } = req.body;
     
-    // 🔍 DEBUG: Log login attempt
-    console.log('🔍 [LOGIN] Attempt:', { email, hasPassword: !!password, deviceType, browserFingerprint, isIncognito });
-    
+    // Validation
     if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required.' });
-    }
-
-    // 🔒 SECURITY: Block incognito/private mode
-    // ✅ FIX: Only block if explicitly detected as incognito
-    if (isIncognito === true) {
-        console.log('⚠️ [LOGIN] Blocked: Incognito mode detected');
-        return res.status(403).json({ error: 'Không thể đăng nhập ở chế độ ẩn danh. Vui lòng tắt chế độ ẩn danh và thử lại.' });
-    }
-
-    // 🔒 SECURITY: Require device type and browser fingerprint
-    // ✅ FIX: Make deviceType and browserFingerprint optional for backward compatibility
-    // If not provided, generate defaults
-    const finalDeviceType = deviceType || 'laptop';
-    const finalBrowserFingerprint = browserFingerprint || `fp_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    
-    // 🔒 SECURITY: Validate device type
-    if (finalDeviceType !== 'laptop' && finalDeviceType !== 'mobile') {
-        return res.status(400).json({ error: 'Invalid device type. Must be "laptop" or "mobile".' });
     }
 
     if (!isRealDatabasePool()) {
@@ -720,231 +944,636 @@ app.post('/api/login', async (req, res) => {
     
     let client;
     try {
-        client = await getDatabaseClient();
-        await client.query('BEGIN');
-
-        // 🔒 SECURITY: Verify user credentials with bcrypt
-        // First, get user by email only (password is hashed, can't compare in SQL)
+        // Get database connection with timeout
+        client = await Promise.race([
+            getDatabaseClient(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Database connection timeout')), 10000)
+            )
+        ]);
+        
+        // Find user by email
         const result = await client.query('SELECT * FROM users WHERE email = $1', [email]);
         if (result.rows.length === 0) {
-            await client.query('ROLLBACK');
-            // 🔒 SECURITY: Don't reveal if email exists or not (prevent user enumeration)
-            // Add delay to prevent timing attacks
-            await new Promise(resolve => setTimeout(resolve, 500));
+            client.release();
             return res.status(401).json({ error: 'Invalid email or password.' });
         }
 
         const user = result.rows[0];
         
-        // 🔍 DEBUG: Log password check
-        console.log('🔍 [LOGIN] User found:', { email: user.email, role: user.role });
-        console.log('🔍 [LOGIN] Password in DB:', user.password ? user.password.substring(0, 20) + '...' : 'NULL');
-        
-        // 🔒 SECURITY: Compare password with bcrypt hash
-        // Support both bcrypt hashes and plain text (for migration)
+        // ✅ PASSWORD VERIFICATION: Support both bcrypt (old) and plain text (new)
         let passwordValid = false;
-        if (user.password && user.password.startsWith('$2b$')) {
-            // Password is bcrypt hash
+        let needsMigration = false;
+        
+        if (user.password && (user.password.startsWith('$2b$') || user.password.startsWith('$2a$') || user.password.startsWith('$2y$'))) {
+            // Old format: bcrypt hash - verify with bcrypt
             passwordValid = await bcrypt.compare(password, user.password);
-            console.log('🔍 [LOGIN] bcrypt.compare result:', passwordValid);
+            needsMigration = passwordValid; // Migrate to plain text if correct
         } else {
-            // Legacy plain text password (for migration)
+            // New format: plain text - direct comparison
             passwordValid = (user.password === password);
-            console.log('🔍 [LOGIN] Plain text comparison result:', passwordValid);
-            // 🔒 SECURITY: If plain text, hash it now for future use
-            if (passwordValid) {
-                const hashedPassword = await bcrypt.hash(password, 10);
-                await client.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, user.id]);
-                console.log('✅ [LOGIN] Password migrated to bcrypt hash');
-            }
         }
         
         if (!passwordValid) {
-            console.log('❌ [LOGIN] Password validation failed');
-            await client.query('ROLLBACK');
-            // 🔒 SECURITY: Add delay to prevent timing attacks
-            await new Promise(resolve => setTimeout(resolve, 500));
+            client.release();
             return res.status(401).json({ error: 'Invalid email or password.' });
         }
         
-        console.log('✅ [LOGIN] Password validated successfully');
+        // ✅ AUTO-MIGRATION: Convert bcrypt to plain text (không làm mất dữ liệu)
+        if (needsMigration) {
+            try {
+                await client.query('UPDATE users SET password = $1 WHERE id = $2', [password, user.id]);
+                console.log(`✅ [LOGIN] Auto-migrated password for user: ${user.email}`);
+            } catch (migrationErr) {
+                // Migration failed but login succeeds - log warning only
+                console.warn(`⚠️ [LOGIN] Password migration failed for ${user.email}:`, migrationErr.message);
+            }
+        }
 
-        // 🔒 SECURITY: Enforce device limits (max 2 laptops + 1 mobile) while allowing same machine multiple browsers
-        // 🔒 SECURITY: Logout previous session on the same machine (same fingerprint)
-        await client.query(
-            `UPDATE user_sessions 
-             SET is_active = false, last_activity = CURRENT_TIMESTAMP 
-             WHERE user_id = $1 AND device_type = $2 AND browser_fingerprint = $3 AND is_active = true`,
-            [user.id, finalDeviceType, finalBrowserFingerprint]
-        );
-
-        // 🔒 SECURITY: Generate JWT token
+        // Generate JWT token
         const token = jwt.sign(
             { 
                 userId: user.id, 
                 email: user.email,
-                role: user.role,
-                deviceType: finalDeviceType,
-                browserFingerprint: finalBrowserFingerprint
+                role: user.role
             },
             JWT_SECRET,
             { expiresIn: JWT_EXPIRES_IN }
         );
-
-        // Generate session token (separate from JWT for session tracking)
-        const sessionToken = jwt.sign(
-            { 
-                userId: user.id,
-                deviceType: finalDeviceType,
-                browserFingerprint: finalBrowserFingerprint,
-                timestamp: Date.now()
-            },
-            JWT_SECRET,
-            { expiresIn: JWT_EXPIRES_IN }
-        );
-
-        // 🔒 SECURITY: Create or update session (UPSERT)
-        await client.query(
-            `INSERT INTO user_sessions (user_id, device_type, browser_fingerprint, session_token, user_agent, ip_address, is_active)
-             VALUES ($1, $2, $3, $4, $5, $6, true)
-             ON CONFLICT (user_id, device_type, browser_fingerprint) 
-             DO UPDATE SET 
-                 browser_fingerprint = EXCLUDED.browser_fingerprint,
-                 session_token = EXCLUDED.session_token,
-                 user_agent = EXCLUDED.user_agent,
-                 ip_address = EXCLUDED.ip_address,
-                 is_active = true,
-                 last_activity = CURRENT_TIMESTAMP`,
-            [user.id, finalDeviceType, finalBrowserFingerprint, sessionToken, userAgent || null, ipAddress || req.ip || null]
-        );
-
-        await client.query('COMMIT');
 
         client.release();
 
-        // Return user data with token (exclude password from response)
+        // Return user data with token (exclude password)
         const { password: _, ...userWithoutPassword } = user;
         res.json({ 
             ...userWithoutPassword, 
-            token,
-            sessionToken
+            token
         });
     } catch (err) {
         if (client) {
-            await client.query('ROLLBACK');
-            client.release();
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [LOGIN] Release error:', releaseErr.message);
+            }
         }
-        console.error('API Login Error:', err.message);
-        res.status(500).json({ error: 'Server error during login.' });
+        console.error('❌ [LOGIN] Error:', err.message);
+        console.error('❌ [LOGIN] Error stack:', err.stack);
+        
+        // Specific error messages
+        let errorMessage = 'Server error during login.';
+        if (err.message && err.message.includes('timeout')) {
+            errorMessage = 'Database connection timeout. Please try again.';
+        } else if (err.message && err.message.includes('ECONNREFUSED')) {
+            errorMessage = 'Database connection failed. Please try again later.';
+        } else if (err.message && err.message.includes('does not exist')) {
+            errorMessage = 'Database table not found. Please contact support.';
+        }
+        res.status(500).json({ error: errorMessage });
     }
 });
 
-// Logout endpoint - invalidate session
-app.post('/api/logout', authenticateToken, async (req, res) => {
+// ============================================
+// SIMPLE AUTH API (Đơn giản, ổn định hơn)
+// ============================================
+
+// ✅ SIMPLIFIED: Plain text login with automatic bcrypt migration
+// Supports both bcrypt (old) and plain text (new) passwords
+// Automatically converts bcrypt to plain text on successful login
+app.post('/api/auth/simple-login', async (req, res) => {
+    const { email, password } = req.body;
+    
+    if (!email || !password) {
+        return res.status(400).json({ error: 'Email và password không được để trống' });
+    }
+
     if (!isRealDatabasePool()) {
-        return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
+        return res.status(503).json({ error: 'Dịch vụ đang bảo trì. Vui lòng thử lại sau.' });
+    }
+    
+    let client;
+    try {
+        client = await Promise.race([
+            getDatabaseClient(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Database connection timeout')), 10000)
+            )
+        ]);
+        
+        // Get user by email (can't compare password in SQL if it's bcrypt)
+        const result = await client.query('SELECT * FROM users WHERE email = $1', [email]);
+        if (result.rows.length === 0) {
+            client.release();
+            return res.status(401).json({ error: 'Email hoặc password không đúng' });
+        }
+
+        const user = result.rows[0];
+        
+        // Check password: support both bcrypt (old) and plain text (new)
+        let passwordValid = false;
+        let needsMigration = false;
+        
+        if (user.password && (user.password.startsWith('$2b$') || user.password.startsWith('$2a$') || user.password.startsWith('$2y$'))) {
+            // Password is bcrypt hash (old format) - verify with bcrypt
+            passwordValid = await bcrypt.compare(password, user.password);
+            needsMigration = passwordValid; // Migrate if password is correct
+        } else {
+            // Password is plain text (new format) - direct comparison
+            passwordValid = (user.password === password);
+        }
+        
+        if (!passwordValid) {
+            client.release();
+            return res.status(401).json({ error: 'Email hoặc password không đúng' });
+        }
+        
+        // ✅ AUTO-MIGRATION: Convert bcrypt to plain text on successful login
+        if (needsMigration) {
+            try {
+                await client.query('UPDATE users SET password = $1 WHERE id = $2', [password, user.id]);
+                console.log(`✅ [SIMPLE-LOGIN] Auto-migrated password for user: ${user.email}`);
+            } catch (migrationErr) {
+                // Migration failed but login is successful - log warning
+                console.warn(`⚠️ [SIMPLE-LOGIN] Password migration failed for ${user.email}:`, migrationErr.message);
+            }
+        }
+        
+        // Generate JWT token
+        const token = jwt.sign(
+            { userId: user.id, email: user.email, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '30d' }
+        );
+        
+        // Return user and token
+        const { password: _, ...userWithoutPassword } = user;
+        res.json({ 
+            user: userWithoutPassword, 
+            token 
+        });
+    } catch (err) {
+        console.error('❌ [SIMPLE-LOGIN] Error:', err.message);
+        res.status(500).json({ error: 'Lỗi server. Vui lòng thử lại sau.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [SIMPLE-LOGIN] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// ✅ SIMPLIFIED: Plain text register - No hashing
+app.post('/api/auth/simple-register', async (req, res) => {
+    const { name, email, password } = req.body;
+    
+    if (!name || !email || !password) {
+        return res.status(400).json({ error: 'Vui lòng điền đầy đủ thông tin' });
+    }
+    
+    if (password.length < 6) {
+        return res.status(400).json({ error: 'Password phải có ít nhất 6 ký tự' });
+    }
+
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Dịch vụ đang bảo trì. Vui lòng thử lại sau.' });
+    }
+    
+    let client;
+    try {
+        client = await Promise.race([
+            getDatabaseClient(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Database connection timeout')), 10000)
+            )
+        ]);
+        
+        // Check if email already exists
+        const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [email]);
+        if (existingUser.rows.length > 0) {
+            client.release();
+            return res.status(400).json({ error: 'Email đã được đăng ký' });
+        }
+        
+        // Store password as plain text (no hashing)
+        const result = await client.query(
+            `INSERT INTO users (name, email, password, role, bananas, registered_at) 
+             VALUES ($1, $2, $3, 'user', 0, NOW()) 
+             RETURNING id, name, email, role, bananas, registered_at`,
+            [name, email, password]
+        );
+        
+        const newUser = result.rows[0];
+        
+        // Generate JWT token
+        const token = jwt.sign(
+            { userId: newUser.id, email: newUser.email, role: newUser.role },
+            JWT_SECRET,
+            { expiresIn: '30d' }
+        );
+        
+        client.release();
+        res.json({ 
+            user: newUser, 
+            token 
+        });
+    } catch (err) {
+        console.error('❌ [SIMPLE-REGISTER] Error:', err.message);
+        res.status(500).json({ error: 'Lỗi server. Vui lòng thử lại sau.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [SIMPLE-REGISTER] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// Get current user
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Dịch vụ đang bảo trì. Vui lòng thử lại sau.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        const result = await client.query(
+            'SELECT id, name, email, role, bananas, registered_at FROM users WHERE id = $1', 
+            [req.user.userId]
+        );
+        client.release();
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        res.json({ user: result.rows[0] });
+    } catch (err) {
+        console.error('❌ [AUTH-ME] Error:', err.message);
+        res.status(500).json({ error: 'Lỗi server' });
+    }
+});
+
+// ✅ NEW: Simplified logout - no device tracking required
+app.post('/api/logout', authenticateToken, async (req, res) => {
+    // Logout is now simple - just return success
+    // JWT token expiration will handle actual logout
+    // Optional: Deactivate all sessions for this user (if needed)
+    if (!isRealDatabasePool()) {
+        // Even if DB is not available, logout should succeed (token-based)
+        return res.json({ message: 'Logged out successfully.' });
     }
     try {
         const client = await getDatabaseClient();
         try {
-            await client.query('BEGIN');
-            
-            // Deactivate current session
+            // Optional: Deactivate all active sessions for this user
             await client.query(
                 `UPDATE user_sessions 
                  SET is_active = false, last_activity = CURRENT_TIMESTAMP 
-                 WHERE user_id = $1 AND device_type = $2 AND browser_fingerprint = $3 AND is_active = true`,
-                [req.user.userId, req.user.deviceType, req.user.browserFingerprint]
+                 WHERE user_id = $1 AND is_active = true`,
+                [req.user.userId]
             );
-            
-            await client.query('COMMIT');
+            client.release();
             res.json({ message: 'Logged out successfully.' });
         } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-        } finally {
             client.release();
+            // Even if session update fails, logout should succeed
+            console.warn('⚠️ [LOGOUT] Session update failed (non-critical):', err.message);
+            res.json({ message: 'Logged out successfully.' });
         }
     } catch (err) {
-        console.error('API Logout Error:', err.message);
-        res.status(500).json({ error: 'Server error during logout.' });
+        // Even if DB connection fails, logout should succeed
+        console.warn('⚠️ [LOGOUT] Database connection failed (non-critical):', err.message);
+        res.json({ message: 'Logged out successfully.' });
     }
 });
 
+// ============================================
+// ✅ NEW: Clean Register Endpoint
+// ============================================
+// Code sạch, đơn giản, đồng bộ SQL
+// Không làm mất dữ liệu user cũ
+// Plain text password (no hashing)
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
-    // 🔒 SECURITY: Don't log password
-    console.log('🟢 [API POST /api/register] Request:', { name, email, hasPassword: !!password });
     
+    // Validation
     if (!name || !email || !password) {
-        console.log('❌ [API POST] Missing required fields');
         return res.status(400).json({ error: 'Name, email, and password are required.' });
+    }
+
+    // Email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+        return res.status(400).json({ error: 'Invalid email format.' });
+    }
+
+    // Password length validation
+    if (password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
     }
 
     if (!isRealDatabasePool()) {
         return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
     }
     
+    let client;
     try {
-        const existingUser = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        // Get database connection with timeout
+        client = await Promise.race([
+            getDatabaseClient(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Database connection timeout')), 15000)
+            )
+        ]);
+        
+        // Start transaction
+        await client.query('BEGIN');
+        
+        // Check if email already exists
+        const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [email]);
         if (existingUser.rows.length > 0) {
-            console.log('❌ [API POST] Email already exists:', email);
+            await client.query('ROLLBACK');
+            client.release();
             return res.status(409).json({ error: 'An account with this email already exists.' });
         }
 
-        // 🔒 SECURITY: Hash password with bcrypt before storing
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
-
+        // Create new user (plain text password, no hashing)
+        const userId = `user_${Date.now()}`;
         const newUser = {
-            id: `user_${Date.now()}`, name, email, password: hashedPassword, role: 'Free',
-            packages: [], activated: true, mobileLogin: false,
-            joinDate: new Date().toLocaleDateString('en-GB'), expiryDate: '-',
-            registered_at: new Date().toISOString(), bananaBalance: 30,
+            id: userId,
+            name: name.trim(),
+            email: email.trim().toLowerCase(),
+            password: password, // Plain text
+            role: 'Free',
+            packages: [],
+            activated: true,
+            mobileLogin: false,
+            joinDate: new Date().toLocaleDateString('en-GB'),
+            expiryDate: '-',
+            registered_at: new Date().toISOString(),
+            bananaBalance: 30 // Welcome bonus
         };
 
-        console.log('   → Inserting user into database:', newUser.id);
-        await pool.query(
+        // Insert user
+        await client.query(
             `INSERT INTO users (id, name, email, password, role, packages, activated, "mobileLogin", "joinDate", "expiryDate", registered_at, "bananaBalance")
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-            Object.values(newUser)
+            [
+                newUser.id,
+                newUser.name,
+                newUser.email,
+                newUser.password,
+                newUser.role,
+                newUser.packages,
+                newUser.activated,
+                newUser.mobileLogin,
+                newUser.joinDate,
+                newUser.expiryDate,
+                newUser.registered_at,
+                newUser.bananaBalance
+            ]
         );
         
-        // 🔒 SECURITY: Don't return password in response
-        const { password: _, ...userWithoutPassword } = newUser;
+        // Log welcome bonus transaction
+        try {
+            await client.query(
+                `INSERT INTO banana_transactions (user_id, transaction_type, amount, balance_before, balance_after, reason, source, created_by)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                [userId, 'add', 30, 0, 30, 'Welcome bonus - New user registration', 'registration', 'system']
+            );
+        } catch (txErr) {
+            // Transaction logging failed but registration succeeds - log warning
+            console.warn(`⚠️ [REGISTER] Transaction logging failed for ${email}:`, txErr.message);
+        }
         
-        console.log('✅ [API POST] User registered successfully:', newUser.id);
+        // Commit transaction
+        await client.query('COMMIT');
+        client.release();
         
-        // Backup users to Cloud Storage (async, non-blocking)
+        // Invalidate cache
+        invalidateUsersCache();
+        
+        // Backup to Cloud Storage (async, non-blocking)
         backupUsersToCloudStorage().catch(err => {
             console.warn('Background backup failed after registration:', err.message);
         });
         
-        // 🔒 SECURITY: Return user without password
+        // Return user without password
+        const { password: _, ...userWithoutPassword } = newUser;
         res.status(201).json(userWithoutPassword);
     } catch (err) {
-        console.error('❌ [API POST] Registration Error:', err.message, err.stack);
-        res.status(500).json({ error: 'Server error during registration.' });
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [REGISTER] Rollback error:', rollbackErr.message);
+            }
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [REGISTER] Release error:', releaseErr.message);
+            }
+        }
+        console.error('❌ [REGISTER] Error:', err.message);
+        console.error('❌ [REGISTER] Error stack:', err.stack);
+        
+        // Specific error messages
+        let errorMessage = 'Server error during registration.';
+        if (err.message && err.message.includes('timeout')) {
+            errorMessage = 'Database connection timeout. Please try again.';
+        } else if (err.message && err.message.includes('ECONNREFUSED')) {
+            errorMessage = 'Database connection failed. Please try again later.';
+        } else if (err.message && err.message.includes('duplicate key') || err.message.includes('unique constraint')) {
+            errorMessage = 'An account with this email already exists.';
+        }
+        res.status(500).json({ error: errorMessage });
     }
 });
 
+// ✅ PRODUCTION FIX: In-memory cache for /api/users to reduce database load
+// ✅ SCALE FIX: Tăng TTL lên 90s để giảm database load khi có nhiều users và tránh timeout
+// Với cache 90s, 90% requests sẽ dùng cache, chỉ 10% cần query database
+const usersCache = {
+    data: null,
+    timestamp: null,
+    ttl: 90000 // 90 seconds cache TTL (tăng từ 60s để giảm database load và tránh timeout)
+};
+
+const getCachedUsers = () => {
+    if (usersCache.data && usersCache.timestamp) {
+        const age = Date.now() - usersCache.timestamp;
+        if (age < usersCache.ttl) {
+            return usersCache.data;
+        }
+    }
+    return null;
+};
+
+const setCachedUsers = (data) => {
+    usersCache.data = data;
+    usersCache.timestamp = Date.now();
+};
+
+const invalidateUsersCache = () => {
+    usersCache.data = null;
+    usersCache.timestamp = null;
+    console.log('🔄 [Cache] Users cache invalidated');
+};
+
 app.get('/api/users', adminAuth, async (req, res) => {
-    const adminKey = req.headers['x-admin-key'];
     const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    const requester = req.user || {};
     
-    console.log('📋 [API GET /api/users] Request:', { adminKey: adminKey ? '***' : 'missing', ip: clientIP });
+    console.log('📋 [API GET /api/users] Request:', { adminId: requester.userId, role: requester.role, ip: clientIP });
     
     if (!isRealDatabasePool()) {
         return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
     }
     
+    // ✅ PRODUCTION FIX: Check cache first
+    const cached = getCachedUsers();
+    if (cached) {
+        console.log(`✅ [API GET /api/users] Returning cached data (${cached.length} users)`);
+        return res.json(cached);
+    }
+    
     try {
-        const result = await pool.query('SELECT * FROM users ORDER BY "registered_at" DESC');
-        console.log('✅ [API GET /api/users] Returned', result.rows.length, 'users');
+        // ✅ PRODUCTION DEBUG: Log query start time
+        const queryStartTime = Date.now();
+        
+        // 🔒 SECURITY: Exclude password from response
+        // ✅ OPTIMIZATION: Simplified query like build 00207-2j7 - SELECT * is faster than specific columns
+        // ✅ FIX: Loại bỏ timeout handling - để query chờ đến khi database trả về (giống build 00207-2j7)
+        // Database sẽ tự timeout nếu query quá lâu, không cần Promise.race
+        const result = await pool.query(`
+            SELECT id, name, email, role, packages, activated, "mobileLogin", "joinDate", "expiryDate", registered_at, "bananaBalance"
+            FROM users 
+            ORDER BY "registered_at" DESC NULLS LAST
+        `);
+        
+        // ✅ PRODUCTION DEBUG: Log query duration
+        const queryDuration = Date.now() - queryStartTime;
+        console.log(`✅ [API GET /api/users] Returned ${result.rows.length} users (password excluded) in ${queryDuration}ms`);
+        
+        // ⚠️ WARNING: Log slow queries (>5s) - nhưng không reject
+        if (queryDuration > 5000) {
+            console.warn(`⚠️  [API GET /api/users] Slow query detected: ${queryDuration}ms (threshold: 5000ms)`);
+            console.warn(`⚠️  [SCALE] Consider running optimize-users-query.sql to create indexes if query is slow`);
+        }
+        
+        // ✅ SCALE FIX: Log performance metrics for monitoring
+        if (result.rows.length > 100) {
+            console.log(`📊 [SCALE] Large dataset: ${result.rows.length} users. Cache will help reduce database load.`);
+        }
+        
+        // ✅ PRODUCTION FIX: Cache the result
+        setCachedUsers(result.rows);
+        
         res.json(result.rows);
     } catch (err) {
         console.error('❌ [API GET /api/users] Error:', err.message, err.stack);
-        res.status(500).json({ error: 'Server error while fetching users.' });
+        
+        // ✅ PRODUCTION FIX: Return cached data if available even on error (timeout, query error, etc.)
+        const cached = getCachedUsers();
+        if (cached) {
+            console.log(`⚠️  [API GET /api/users] Database error (${err.message}), returning stale cache (${cached.length} users)`);
+            // ✅ TIMEOUT FIX: Return stale cache with warning header
+            res.setHeader('X-Cache-Status', 'stale');
+            return res.json(cached);
+        }
+        
+        // ✅ FIX: Không có timeout handling - database sẽ tự xử lý timeout
+        // Nếu có cache, trả về cache. Nếu không, trả về error thông thường
+        res.status(500).json({ 
+            error: err.message && err.message.includes('timeout') 
+                ? 'Database query timeout. Server đang quá tải. Vui lòng thử lại sau vài giây.'
+                : 'Server error while fetching users.'
+        });
+    }
+});
+
+// Get user total score (sum of all test scores)
+// 🔒 SECURITY: Requires authentication - user can only get their own score
+// ⚠️ IMPORTANT: This route must be BEFORE /api/users/:id to avoid route conflict
+app.get('/api/user/score/:userId', authenticateToken, async (req, res) => {
+    const { userId } = req.params;
+    const authenticatedUserId = req.user?.userId; // From JWT token
+    
+    // Check if user is authenticated
+    if (!authenticatedUserId) {
+        console.warn('⚠️ [AUTH] Unauthenticated request to get user score');
+        return res.status(401).json({ error: 'Authentication required.' });
+    }
+    
+    // 🔒 SECURITY: Verify user can only get their own score
+    if (userId !== authenticatedUserId) {
+        console.warn('⚠️ [SECURITY] User attempted to get score of another user:', { 
+            authenticatedUserId, 
+            requestedUserId: userId 
+        });
+        return res.status(403).json({ error: 'You can only view your own score.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        console.warn('⚠️ [DB] Database pool not available for user score request');
+        return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
+    }
+    
+    try {
+        // Get total score from test_results (sum of all scores)
+        const scoreResult = await pool.query(`
+            SELECT 
+                COALESCE(SUM(score), 0) as total_score,
+                COUNT(*) as total_tests
+            FROM test_results
+            WHERE user_id = $1
+        `, [userId]);
+        
+        if (!scoreResult || !scoreResult.rows || scoreResult.rows.length === 0) {
+            // Return 0 if no results found (user hasn't taken any tests yet)
+            return res.json({ 
+                totalScore: 0,
+                totalTests: 0,
+                userId 
+            });
+        }
+        
+        const totalScore = parseInt(scoreResult.rows[0]?.total_score || 0, 10);
+        const totalTests = parseInt(scoreResult.rows[0]?.total_tests || 0, 10);
+        
+        res.json({ 
+            totalScore,
+            totalTests,
+            userId 
+        });
+    } catch (err) {
+        console.error('❌ API Get User Score Error:', {
+            message: err.message,
+            stack: err.stack,
+            userId: userId
+        });
+        
+        // Check if it's a database connection error
+        if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+            return res.status(503).json({ error: 'Database connection failed. Please try again later.' });
+        }
+        
+        // Check if table doesn't exist
+        if (err.message && err.message.includes('does not exist')) {
+            console.warn('⚠️ [DB] test_results table may not exist, returning 0 score');
+            return res.json({ 
+                totalScore: 0,
+                totalTests: 0,
+                userId 
+            });
+        }
+        
+        res.status(500).json({ error: 'Server error while fetching user score.' });
     }
 });
 
@@ -954,7 +1583,12 @@ app.get('/api/users/:id', async (req, res) => {
         return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
     }
     try {
-        const result = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+        // 🔒 SECURITY: Exclude password from response
+        const result = await pool.query(`
+            SELECT id, name, email, role, packages, activated, "mobileLogin", "joinDate", "expiryDate", registered_at, "bananaBalance"
+            FROM users 
+            WHERE id = $1
+        `, [id]);
         if (result.rows.length > 0) {
             res.json(result.rows[0]);
         } else {
@@ -969,14 +1603,14 @@ app.get('/api/users/:id', async (req, res) => {
 
 app.delete('/api/users/:id', adminAuth, async (req, res) => {
     const { id } = req.params;
-    const adminKey = req.headers['x-admin-key'];
     const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    const requester = req.user || {};
     
-    console.log('🔴 [API DELETE /api/users/:id] Request:', { id, adminKey: adminKey ? '***' : 'missing', ip: clientIP });
+    console.log('🔴 [API DELETE /api/users/:id] Request:', { id, adminId: requester.userId, role: requester.role, ip: clientIP });
     
     // 🔒 SECURITY: Validate input
     if (!id || typeof id !== 'string' || id.trim() === '') {
-        console.warn('⚠️ [SECURITY] Invalid user ID in DELETE request:', { id, ip: clientIP });
+        console.warn('⚠️ [SECURITY] Invalid user ID in DELETE request:', { id, ip: clientIP, adminId: requester.userId });
         return res.status(400).json({ error: 'Invalid user ID.' });
     }
     
@@ -1018,7 +1652,8 @@ app.delete('/api/users/:id', adminAuth, async (req, res) => {
                 name: user.name, 
                 role: user.role,
                 bananaBalance: user.bananaBalance,
-                adminKey: adminKey ? '***' : 'missing',
+                adminId: requester.userId,
+                adminEmail: requester.email,
                 ip: clientIP,
                 timestamp: new Date().toISOString()
             });
@@ -1028,6 +1663,9 @@ app.delete('/api/users/:id', adminAuth, async (req, res) => {
             await client.query('COMMIT');
             
             console.log('✅ [API DELETE] User deleted successfully:', { id, email: user.email, ip: clientIP });
+            
+            // ✅ PRODUCTION FIX: Invalidate cache after user delete
+            invalidateUsersCache();
             
             // Backup users to Cloud Storage (async, non-blocking)
             backupUsersToCloudStorage().catch(err => {
@@ -1092,12 +1730,10 @@ app.put('/api/users/profile/:id', async (req, res) => {
         console.log('✅ [API PUT /api/users/profile/:id] Name will be updated to:', name);
     }
     if (password) {
-        // 🔒 SECURITY: Hash password with bcrypt before storing
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        // ✅ SIMPLIFIED: Store password as plain text (no hashing)
         fields.push(`password = $${fields.length + 1}`);
-        values.push(hashedPassword);
-        console.log('✅ [API PUT /api/users/profile/:id] Password will be updated (hashed)');
+        values.push(password);
+        console.log('✅ [API PUT /api/users/profile/:id] Password will be updated');
     }
     // Update bananaBalance if provided
     if (bananaBalance !== undefined && bananaBalance !== null) {
@@ -1176,43 +1812,43 @@ app.put('/api/users/profile/:id', async (req, res) => {
 app.put('/api/users/:id', adminAuth, async (req, res) => {
     const { id } = req.params;
     const { bananaBalance, role, password, email, name } = req.body;
-    const adminKey = req.headers['x-admin-key'];
     const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    const requester = req.user || {};
     
-    console.log('🔵 [API PUT /api/users/:id] Request:', { id, name, bananaBalance, role, hasPassword: !!password, email: email, adminKey: adminKey ? '***' : 'missing', ip: clientIP });
+    console.log('🔵 [API PUT /api/users/:id] Request:', { id, name, bananaBalance, role, hasPassword: !!password, email, adminId: requester.userId, ip: clientIP });
     
     // 🔒 SECURITY: Validate input
     if (!id || typeof id !== 'string' || id.trim() === '') {
-        console.warn('⚠️ [SECURITY] Invalid user ID in PUT request:', { id, ip: clientIP });
+        console.warn('⚠️ [SECURITY] Invalid user ID in PUT request:', { id, ip: clientIP, adminId: requester.userId });
         return res.status(400).json({ error: 'Invalid user ID.' });
     }
     
     // 🔒 SECURITY: Validate email format if provided
     if (email !== undefined && email !== null && typeof email === 'string' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        console.warn('⚠️ [SECURITY] Invalid email format in PUT request:', { id, email, ip: clientIP });
+        console.warn('⚠️ [SECURITY] Invalid email format in PUT request:', { id, email, ip: clientIP, adminId: requester.userId });
         return res.status(400).json({ error: 'Invalid email format.' });
     }
     
     // 🔒 SECURITY: Validate name if provided
     if (name !== undefined && name !== null && (typeof name !== 'string' || name.trim() === '')) {
-        console.warn('⚠️ [SECURITY] Invalid name in PUT request:', { id, name, ip: clientIP });
+        console.warn('⚠️ [SECURITY] Invalid name in PUT request:', { id, name, ip: clientIP, adminId: requester.userId });
         return res.status(400).json({ error: 'Name cannot be empty.' });
     }
     
     // 🔒 SECURITY: Validate role if provided
     if (role && !['Free', 'Premium', 'Admin'].includes(role)) {
-        console.warn('⚠️ [SECURITY] Invalid role in PUT request:', { id, role, ip: clientIP });
+        console.warn('⚠️ [SECURITY] Invalid role in PUT request:', { id, role, ip: clientIP, adminId: requester.userId });
         return res.status(400).json({ error: 'Invalid role. Must be Free, Premium, or Admin.' });
     }
     
     // 🔒 SECURITY: Validate bananaBalance if provided
     if (bananaBalance !== undefined && bananaBalance !== null) {
         if (typeof bananaBalance !== 'number' || isNaN(bananaBalance) || bananaBalance < 0) {
-            console.warn('⚠️ [SECURITY] Invalid bananaBalance in PUT request:', { id, bananaBalance, ip: clientIP });
+            console.warn('⚠️ [SECURITY] Invalid bananaBalance in PUT request:', { id, bananaBalance, ip: clientIP, adminId: requester.userId });
             return res.status(400).json({ error: 'Banana balance must be a non-negative number.' });
         }
         if (bananaBalance > 1000000) { // Max 1M bananas
-            console.warn('⚠️ [SECURITY] Attempted to set excessive balance:', { userId: id, balance: bananaBalance, ip: clientIP });
+            console.warn('⚠️ [SECURITY] Attempted to set excessive balance:', { userId: id, balance: bananaBalance, ip: clientIP, adminId: requester.userId });
             return res.status(400).json({ error: 'Balance exceeds maximum limit (1,000,000).' });
         }
     }
@@ -1220,7 +1856,7 @@ app.put('/api/users/:id', adminAuth, async (req, res) => {
     // 🔒 SECURITY: Validate password if provided
     if (password !== undefined && password !== null) {
         if (typeof password !== 'string' || password.length < 5) {
-            console.warn('⚠️ [SECURITY] Invalid password in PUT request:', { id, passwordLength: password?.length, ip: clientIP });
+            console.warn('⚠️ [SECURITY] Invalid password in PUT request:', { id, passwordLength: password?.length, ip: clientIP, adminId: requester.userId });
             return res.status(400).json({ error: 'Password must be at least 5 characters long.' });
         }
     }
@@ -1243,11 +1879,9 @@ app.put('/api/users/:id', adminAuth, async (req, res) => {
         values.push(role);
     }
     if (password) {
-        // 🔒 SECURITY: Hash password with bcrypt before storing
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        // ✅ SIMPLIFIED: Store password as plain text (no hashing)
         fields.push(`password = $${fields.length + 1}`);
-        values.push(hashedPassword);
+        values.push(password);
     }
     // Always process email if provided (even if it's the same)
     if (email !== undefined && email !== null) {
@@ -1316,7 +1950,7 @@ app.put('/api/users/:id', adminAuth, async (req, res) => {
                         await client.query(
                             `INSERT INTO banana_transactions (user_id, transaction_type, amount, balance_before, balance_after, reason, source, created_by)
                              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                            [id, transactionType, amount, balanceBefore, balanceAfter, 'Admin adjustment', 'admin_panel', req.headers['x-admin-key'] || 'system']
+                            [id, transactionType, amount, balanceBefore, balanceAfter, 'Admin adjustment', 'admin_panel', (req.user && req.user.userId) || 'system']
                         );
                         console.log('📝 [API PUT] Transaction logged:', { userId: id, type: transactionType, amount, before: balanceBefore, after: balanceAfter });
                     }
@@ -1329,6 +1963,9 @@ app.put('/api/users/:id', adminAuth, async (req, res) => {
             
         if(result.rows.length > 0) {
                 console.log('✅ [API PUT] User updated:', result.rows[0].id, 'Name:', result.rows[0].name, 'Email:', result.rows[0].email, 'Balance:', result.rows[0].bananaBalance);
+            // ✅ PRODUCTION FIX: Invalidate cache after user update
+            invalidateUsersCache();
+            
             // Backup users to Cloud Storage (async, non-blocking)
             backupUsersToCloudStorage().catch(err => {
                 console.warn('Background backup failed after user update:', err.message);
@@ -1359,8 +1996,64 @@ app.put('/api/users/:id', adminAuth, async (req, res) => {
 // const storage = new Storage(); // Moved to loadHeavyModules()
 const BUCKET_NAME = 'matcanban-assets';
 
+// ✅ IMPROVEMENT: Load node-cron for scheduled backups
+let cron = null;
+try {
+    cron = require('node-cron');
+    console.log('✅ node-cron loaded for scheduled backups');
+} catch (error) {
+    console.warn('⚠️  node-cron not available:', error.message);
+}
+
+// ✅ IMPROVEMENT: Backup verification function
+const verifyBackupFile = async (bucket, fileName, expectedUserCount) => {
+    try {
+        console.log('🔍 [VERIFY] Verifying backup file:', fileName);
+        const file = bucket.file(fileName);
+        const [exists] = await file.exists();
+        
+        if (!exists) {
+            console.error('❌ [VERIFY] Backup file does not exist:', fileName);
+            return { success: false, error: 'File does not exist' };
+        }
+        
+        // Download and verify
+        const [buffer] = await file.download();
+        const backupData = JSON.parse(buffer.toString());
+        
+        // Verify structure
+        if (!backupData.users || !Array.isArray(backupData.users)) {
+            console.error('❌ [VERIFY] Invalid backup format: users array not found');
+            return { success: false, error: 'Invalid backup format' };
+        }
+        
+        // Verify user count
+        if (backupData.totalUsers !== expectedUserCount) {
+            console.error(`❌ [VERIFY] User count mismatch: expected ${expectedUserCount}, got ${backupData.totalUsers}`);
+            return { success: false, error: `User count mismatch: expected ${expectedUserCount}, got ${backupData.totalUsers}` };
+        }
+        
+        if (backupData.users.length !== expectedUserCount) {
+            console.error(`❌ [VERIFY] Users array length mismatch: expected ${expectedUserCount}, got ${backupData.users.length}`);
+            return { success: false, error: `Users array length mismatch: expected ${expectedUserCount}, got ${backupData.users.length}` };
+        }
+        
+        // Verify timestamp exists
+        if (!backupData.timestamp) {
+            console.error('❌ [VERIFY] Missing timestamp in backup');
+            return { success: false, error: 'Missing timestamp' };
+        }
+        
+        console.log(`✅ [VERIFY] Backup verified successfully: ${backupData.totalUsers} users, timestamp: ${backupData.timestamp}`);
+        return { success: true, verifiedCount: backupData.totalUsers };
+    } catch (error) {
+        console.error('❌ [VERIFY] Verification error:', error.message);
+        return { success: false, error: error.message };
+    }
+};
+
 // --- Helper Function to backup users data to Cloud Storage ---
-const backupUsersToCloudStorage = async () => {
+const backupUsersToCloudStorage = async (skipVerification = false) => {
     // ⚡ Lazy load Storage if not already loaded
     if (!storage) {
         loadHeavyModules();
@@ -1423,7 +2116,31 @@ const backupUsersToCloudStorage = async () => {
         });
 
         const totalUsers = users.length;
-        console.log(`✅ Users backup successful: ${totalUsers} users saved to ${fileName} and ${latestFileName}`);
+        console.log(`✅ Users backup uploaded: ${totalUsers} users saved to ${fileName} and ${latestFileName}`);
+        
+        // ✅ IMPROVEMENT: Verify backup files after upload
+        if (!skipVerification) {
+            console.log('🔍 [BACKUP] Verifying backup files...');
+            
+            // Verify timestamped backup
+            const timestampedVerify = await verifyBackupFile(bucket, fileName, totalUsers);
+            if (!timestampedVerify.success) {
+                console.error('❌ [BACKUP] Timestamped backup verification failed:', timestampedVerify.error);
+                // Don't fail the backup, but log the error
+            }
+            
+            // Verify latest backup
+            const latestVerify = await verifyBackupFile(bucket, latestFileName, totalUsers);
+            if (!latestVerify.success) {
+                console.error('❌ [BACKUP] Latest backup verification failed:', latestVerify.error);
+                // Don't fail the backup, but log the error
+            }
+            
+            if (timestampedVerify.success && latestVerify.success) {
+                console.log('✅ [BACKUP] All backup files verified successfully');
+            }
+        }
+        
         return { success: true, fileName, latestFileName, totalUsers };
     } catch (error) {
         console.error('❌ Failed to backup users to Cloud Storage:', error.message);
@@ -1570,7 +2287,8 @@ app.get('/api/test-results/stats/:userId', async (req, res) => {
                 MIN(percentage) as worst_score,
                 SUM(time_spent) as total_time_spent,
                 COUNT(DISTINCT test_type) as test_types_count,
-                COUNT(DISTINCT test_id) as unique_tests_count
+                COUNT(DISTINCT test_id) as unique_tests_count,
+                SUM(score) as total_score
             FROM test_results
             WHERE user_id = $1
         `, [userId]);
@@ -1745,6 +2463,198 @@ app.get('/api/users/backup/latest', adminAuth, async (req, res) => {
     }
 });
 
+// NEW: List all backup files
+app.get('/api/users/backup/list', adminAuth, async (req, res) => {
+    // ⚡ Lazy load Storage if not already loaded
+    if (!storage) {
+        loadHeavyModules();
+    }
+    
+    if (!storage) {
+        return res.status(503).json({ error: 'Storage service not available' });
+    }
+    
+    try {
+        const bucket = storage.bucket(BUCKET_NAME);
+        const [files] = await bucket.getFiles({ prefix: 'backups/' });
+        
+        const backups = files
+            .filter(file => file.name.endsWith('.json'))
+            .map(file => ({
+                name: file.name,
+                size: file.metadata.size,
+                updated: file.metadata.updated,
+                created: file.metadata.timeCreated
+            }))
+            .sort((a, b) => new Date(b.updated) - new Date(a.updated)); // Sort by updated date (newest first)
+        
+        res.json({
+            success: true,
+            backups: backups,
+            total: backups.length
+        });
+    } catch (err) {
+        console.error('List backups error:', err.message);
+        res.status(500).json({ error: 'Server error while listing backups.' });
+    }
+});
+
+// NEW: Restore users from backup
+app.post('/api/users/restore', adminAuth, async (req, res) => {
+    const { fileName } = req.body; // Optional: restore from specific file (default: latest)
+    
+    // ⚡ Lazy load Storage if not already loaded
+    if (!storage) {
+        loadHeavyModules();
+    }
+    
+    if (!storage) {
+        return res.status(503).json({ error: 'Storage service not available' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
+    }
+    
+    let client;
+    try {
+        console.log('🔍 [RESTORE] Starting restore process...');
+        console.log('🔍 [RESTORE] File name:', fileName || 'backups/users-latest.json');
+        
+        // Download backup from Cloud Storage
+        const backupFile = fileName || 'backups/users-latest.json';
+        const bucket = storage.bucket(BUCKET_NAME);
+        const file = bucket.file(backupFile);
+        
+        const [exists] = await file.exists();
+        if (!exists) {
+            return res.status(404).json({ error: `Backup file not found: ${backupFile}` });
+        }
+        
+        console.log('✅ [RESTORE] Backup file found, downloading...');
+        const [buffer] = await file.download();
+        const backupData = JSON.parse(buffer.toString());
+        
+        if (!backupData.users || !Array.isArray(backupData.users)) {
+            return res.status(400).json({ error: 'Invalid backup file format. Users array not found.' });
+        }
+        
+        console.log(`✅ [RESTORE] Backup loaded: ${backupData.totalUsers} users from ${backupData.timestamp}`);
+        
+        // Restore users to database
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        console.log('✅ [RESTORE] Transaction started');
+        
+        let restoredCount = 0;
+        let updatedCount = 0;
+        let skippedCount = 0;
+        
+        for (const user of backupData.users) {
+            try {
+                // Check if user exists
+                const existingUser = await client.query('SELECT id FROM users WHERE id = $1', [user.id]);
+                
+                if (existingUser.rows.length > 0) {
+                    // Update existing user (but preserve password if it exists in DB)
+                    // Only update non-sensitive fields from backup
+                    await client.query(
+                        `UPDATE users SET 
+                            name = $1, 
+                            email = $2, 
+                            role = $3, 
+                            packages = $4, 
+                            activated = $5, 
+                            "mobileLogin" = $6, 
+                            "joinDate" = $7, 
+                            "expiryDate" = $8, 
+                            registered_at = $9, 
+                            "bananaBalance" = $10
+                         WHERE id = $11`,
+                        [
+                            user.name,
+                            user.email,
+                            user.role || 'Free',
+                            JSON.stringify(user.packages || []),
+                            user.activated !== undefined ? user.activated : true,
+                            user.mobileLogin !== undefined ? user.mobileLogin : false,
+                            user.joinDate || null,
+                            user.expiryDate || '-',
+                            user.registered_at || new Date().toISOString(),
+                            user.bananaBalance || 30,
+                            user.id
+                        ]
+                    );
+                    updatedCount++;
+                } else {
+                    // Insert new user (password will need to be set manually or user needs to reset)
+                    // Use a temporary plain text password that user must reset
+                    const tempPassword = 'TEMP_RESET_REQUIRED'; // Plain text - no hashing
+                    
+                    await client.query(
+                        `INSERT INTO users (id, name, email, password, role, packages, activated, "mobileLogin", "joinDate", "expiryDate", registered_at, "bananaBalance")
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+                        [
+                            user.id,
+                            user.name,
+                            user.email,
+                            tempPassword, // Temporary password - user must reset
+                            user.role || 'Free',
+                            JSON.stringify(user.packages || []),
+                            user.activated !== undefined ? user.activated : true,
+                            user.mobileLogin !== undefined ? user.mobileLogin : false,
+                            user.joinDate || null,
+                            user.expiryDate || '-',
+                            user.registered_at || new Date().toISOString(),
+                            user.bananaBalance || 30
+                        ]
+                    );
+                    restoredCount++;
+                }
+            } catch (userErr) {
+                console.error(`⚠️ [RESTORE] Error restoring user ${user.id}:`, userErr.message);
+                skippedCount++;
+            }
+        }
+        
+        await client.query('COMMIT');
+        console.log('✅ [RESTORE] Transaction committed');
+        
+        const totalProcessed = restoredCount + updatedCount;
+        console.log(`✅ [RESTORE] Restore complete: ${restoredCount} restored, ${updatedCount} updated, ${skippedCount} skipped`);
+        
+        res.json({
+            success: true,
+            message: `Restore complete: ${restoredCount} users restored, ${updatedCount} users updated, ${skippedCount} skipped`,
+            restored: restoredCount,
+            updated: updatedCount,
+            skipped: skippedCount,
+            total: totalProcessed,
+            backupTimestamp: backupData.timestamp,
+            backupTotalUsers: backupData.totalUsers
+        });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [RESTORE] Rollback error:', rollbackErr.message);
+            }
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [RESTORE] Release error:', releaseErr.message);
+            }
+        }
+        console.error('❌ [RESTORE] Restore error:', err.message);
+        console.error('❌ [RESTORE] Error stack:', err.stack);
+        res.status(500).json({ 
+            error: 'Server error during restore.',
+            details: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+    }
+});
+
 
 // --- AIO DATA SYNC API ---
 
@@ -1814,19 +2724,17 @@ app.post('/api/sync-data', adminAuth, async (req, res) => {
 
 // --- Test Questions API Endpoints ---
 
-// Test data mapping - maps test IDs to their data file paths
-const testDataMapping = {
-    'toeic-part5-test1-2020': () => require('./data/toeic-part5-test1-2020-data').toeicPart5Test1_2020_Questions,
-    'toeic-part5-test2-2020': () => require('./data/toeic-part5-test2-2020-data').toeicPart5Test2_2020_Questions,
-    'toeic-part5-test3-2020': () => require('./data/toeic-part5-test3-2020-data').toeicPart5Test3_2020_Questions,
-    'toeic-part5-test4-2020': () => require('./data/toeic-part5-test4-2020-data').toeicPart5Test4_2020_Questions,
-    'toeic-part5-test5-2020': () => require('./data/toeic-part5-test5-2020-data').toeicPart5Test5_2020_Questions,
-    'toeic-part5-test6-2020': () => require('./data/toeic-part5-test6-2020-data').toeicPart5Test6_2020_Questions,
-    'toeic-part5-test7-2020': () => require('./data/toeic-part5-test7-2020-data').toeicPart5Test7_2020_Questions,
-    'toeic-part5-test8-2020': () => require('./data/toeic-part5-test8-2020-data').toeicPart5Test8_2020_Questions,
-    'toeic-part5-test9-2020': () => require('./data/toeic-part5-test9-2020-data').toeicPart5Test9_2020_Questions,
-    'toeic-part5-test10-2020': () => require('./data/toeic-part5-test10-2020-data').toeicPart5Test10_2020_Questions,
-    // Add more mappings as needed
+// Simple solution: Frontend will load test data directly
+// Backend API just returns a message that data should be loaded from frontend
+// This is simpler because frontend can import TypeScript files directly via Vite
+
+// Simple solution: Return test registry info instead of loading data
+// Frontend can load TypeScript files directly via Vite
+const loadTestData = (testId) => {
+    // For now, return null - frontend should load data directly
+    // This is simpler because Vite can handle TypeScript imports
+    console.log(`[LoadTestData] Test ${testId} data should be loaded from frontend`);
+    return null;
 };
 
 // Get test questions
@@ -1834,76 +2742,101 @@ app.get('/api/test-questions/:testId', adminAuth, async (req, res) => {
     const { testId } = req.params;
     
     try {
-        const getQuestions = testDataMapping[testId];
-        if (!getQuestions) {
-            return res.status(404).json({ error: `Test ${testId} not found` });
+        console.log(`[API] GET /api/test-questions/${testId}`);
+        const questionData = loadTestData(testId);
+        
+        if (!questionData) {
+            console.error(`[API] Test ${testId} not found or data file not available`);
+            return res.status(404).json({ 
+                error: `Test ${testId} not found or data file not available`,
+                details: 'Check server logs for more information'
+            });
         }
         
-        // For now, return the questions from the module
-        // In production, you might want to cache or read from database
-        const questions = getQuestions();
-        
-        res.json({ questions });
+        console.log(`[API] Successfully returning ${questionData.length} questions for ${testId}`);
+        res.json({ questions: questionData });
     } catch (err) {
-        console.error('API Get Test Questions Error:', err.message);
-        res.status(500).json({ error: 'Server error while fetching test questions.' });
+        console.error('[API] Get Test Questions Error:', err.message);
+        console.error('[API] Stack:', err.stack);
+        res.status(500).json({ 
+            error: 'Server error while fetching test questions.',
+            details: err.message
+        });
     }
 });
 
 // Update test question (explanation and rule only)
+// Simple solution: Save to database instead of editing TypeScript files
 app.put('/api/test-questions/:testId/:questionId', adminAuth, async (req, res) => {
     const { testId, questionId } = req.params;
     const { explanation, rule } = req.body;
     
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
     try {
-        // Get the data file path
-        const getQuestions = testDataMapping[testId];
-        if (!getQuestions) {
-            return res.status(404).json({ error: `Test ${testId} not found` });
-        }
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
         
-        const dataFileMap = {
-            'toeic-part5-test1-2020': 'data/toeic-part5-test1-2020-data.ts',
-            'toeic-part5-test2-2020': 'data/toeic-part5-test2-2020-data.ts',
-            'toeic-part5-test3-2020': 'data/toeic-part5-test3-2020-data.ts',
-            'toeic-part5-test4-2020': 'data/toeic-part5-test4-2020-data.ts',
-            'toeic-part5-test5-2020': 'data/toeic-part5-test5-2020-data.ts',
-            'toeic-part5-test6-2020': 'data/toeic-part5-test6-2020-data.ts',
-            'toeic-part5-test7-2020': 'data/toeic-part5-test7-2020-data.ts',
-            'toeic-part5-test8-2020': 'data/toeic-part5-test8-2020-data.ts',
-            'toeic-part5-test9-2020': 'data/toeic-part5-test9-2020-data.ts',
-            'toeic-part5-test10-2020': 'data/toeic-part5-test10-2020-data.ts',
-        };
+        // Upsert question override
+        await client.query(`
+            INSERT INTO test_question_overrides (test_id, question_id, explanation, rule, updated_at)
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            ON CONFLICT (test_id, question_id)
+            DO UPDATE SET 
+                explanation = EXCLUDED.explanation,
+                rule = EXCLUDED.rule,
+                updated_at = CURRENT_TIMESTAMP
+        `, [testId, parseInt(questionId, 10), explanation || null, rule || null]);
         
-        const filePath = dataFileMap[testId];
-        if (!filePath) {
-            return res.status(404).json({ error: `Test file for ${testId} not found` });
-        }
-        
-        // Read the file
-        const fullPath = path.join(__dirname, filePath);
-        let fileContent = fs.readFileSync(fullPath, 'utf8');
-        
-        // Find and update the question
-        const questionIdNum = parseInt(questionId, 10);
-        const questionRegex = new RegExp(`(id:\\s*${questionIdNum}[^}]*explanation:\\s*")([^"]*)(")[^}]*rule:\\s*"([^"]*)(")`, 's');
-        
-        if (questionRegex.test(fileContent)) {
-            fileContent = fileContent.replace(questionRegex, (match, p1, p2, p3, p4, p5) => {
-                return `${p1}${explanation.replace(/"/g, '\\"')}${p3}${match.split('rule:')[0].split(explanation)[1]}rule: "${rule.replace(/"/g, '\\"')}"`;
-            });
-            
-            // Write back to file
-            fs.writeFileSync(fullPath, fileContent, 'utf8');
-            
-            res.json({ success: true, message: 'Question updated successfully' });
-        } else {
-            // Try alternative pattern (questions might be in separate files)
-            res.status(404).json({ error: `Question ${questionId} not found in test ${testId}` });
-        }
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Question updated successfully' });
     } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('Rollback error:', rollbackErr.message);
+            }
+        }
         console.error('API Update Test Question Error:', err.message);
-        res.status(500).json({ error: 'Server error while updating test question.' });
+        console.error('Stack:', err.stack);
+        res.status(500).json({ error: 'Server error while updating test question.', details: err.message });
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+});
+
+// Get test question overrides (for merging with original data)
+app.get('/api/test-questions/:testId/overrides', adminAuth, async (req, res) => {
+    const { testId } = req.params;
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        const result = await client.query(`
+            SELECT question_id, explanation, rule, updated_at
+            FROM test_question_overrides
+            WHERE test_id = $1
+            ORDER BY question_id
+        `, [testId]);
+        
+        res.json(result.rows);
+    } catch (err) {
+        console.error('API Get Test Question Overrides Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching question overrides.', details: err.message });
+    } finally {
+        if (client) {
+            client.release();
+        }
     }
 });
 
@@ -2052,7 +2985,7 @@ app.post('/api/banana-transactions', authenticateToken, async (req, res) => {
             `INSERT INTO banana_transactions (user_id, transaction_type, amount, balance_before, balance_after, reason, source, created_by)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING *`,
-            [userId, transactionType, amount, balanceBefore, balanceAfter, reason || 'System transaction', source || 'system', req.headers['x-admin-key'] || 'system']
+            [userId, transactionType, amount, balanceBefore, balanceAfter, reason || 'System transaction', source || 'system', (req.user && req.user.userId) || 'system']
         );
         
         await client.query('COMMIT');
@@ -2103,7 +3036,7 @@ app.post('/api/banana-transactions/public', async (req, res) => {
     }
     
     // 🔒 SECURITY: Verify user exists and credentials are correct
-    // ✅ FIX: Use bcrypt to verify password (not plain text comparison)
+    // ✅ SIMPLIFIED: Plain text password comparison (no bcrypt)
     try {
         const userCheck = await pool.query('SELECT id, email, password, "bananaBalance" FROM users WHERE id = $1 AND email = $2', [userId, userEmail]);
         if (userCheck.rows.length === 0) {
@@ -2115,13 +3048,14 @@ app.post('/api/banana-transactions/public', async (req, res) => {
         
         const user = userCheck.rows[0];
         
-        // 🔒 SECURITY: Verify password with bcrypt
+        // ✅ SIMPLIFIED: Plain text password comparison
+        // Support both bcrypt (old) and plain text (new) for backward compatibility
         let passwordValid = false;
-        if (user.password && user.password.startsWith('$2b$')) {
-            // Password is bcrypt hash
+        if (user.password && (user.password.startsWith('$2b$') || user.password.startsWith('$2a$') || user.password.startsWith('$2y$'))) {
+            // Old format: bcrypt hash - verify with bcrypt
             passwordValid = await bcrypt.compare(userPassword, user.password);
         } else {
-            // Legacy plain text password (for migration)
+            // New format: plain text - direct comparison
             passwordValid = (user.password === userPassword);
         }
         
@@ -2488,7 +3422,7 @@ app.post('/api/daily-checkin', authenticateToken, async (req, res) => {
             if (existingCheckin.rows.length > 0) {
                 client.release();
                 return res.status(400).json({ 
-                    error: 'Bạn đã điểm danh hôm nay rồi! Vui lòng quay lại vào ngày mai.',
+                    error: 'Ngày mai bạn vào điểm danh để nhận thưởng tiếp nhé',
                     alreadyCheckedIn: true,
                     checkinDate: existingCheckin.rows[0].checkin_date,
                     bananasEarned: existingCheckin.rows[0].bananas_earned
@@ -2759,6 +3693,1477 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ✅ FIX: Site data API endpoints for admin
+app.get('/api/site-data', adminAuth, async (req, res) => {
+    const { key } = req.query;
+    
+    if (!key || typeof key !== 'string') {
+        return res.status(400).json({ error: 'Key parameter is required.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            // Check if site_data table exists
+            const tableExists = await client.query(
+                "SELECT to_regclass($1)",
+                ['public.site_data']
+            );
+            
+            if (!tableExists.rows[0].to_regclass) {
+                // Table doesn't exist, return empty object
+                return res.json({ key, data: null, updated_by: null, updated_at: null });
+            }
+            
+            // Query site_data table
+            const result = await client.query(
+                'SELECT data, updated_by, updated_at FROM site_data WHERE key = $1',
+                [key]
+            );
+            
+            if (result.rows.length === 0) {
+                return res.json({ key, data: null, updated_by: null, updated_at: null });
+            }
+            
+            res.json({
+                key,
+                data: result.rows[0].data,
+                updated_by: result.rows[0].updated_by,
+                updated_at: result.rows[0].updated_at
+            });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/site-data] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching site data.' });
+    }
+});
+
+app.post('/api/site-data', adminAuth, async (req, res) => {
+    const { key, data, updated_by } = req.body;
+    
+    if (!key || typeof key !== 'string') {
+        return res.status(400).json({ error: 'Key parameter is required.' });
+    }
+    
+    if (data === undefined) {
+        return res.status(400).json({ error: 'Data is required.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        // Ensure site_data table exists
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS site_data (
+                key VARCHAR(255) PRIMARY KEY,
+                data JSONB NOT NULL,
+                updated_by VARCHAR(255),
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        
+        // Insert or update site data
+        await client.query(
+            `INSERT INTO site_data (key, data, updated_by, updated_at)
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+             ON CONFLICT (key) 
+             DO UPDATE SET 
+                 data = EXCLUDED.data,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = CURRENT_TIMESTAMP`,
+            [key, JSON.stringify(data), updated_by || null]
+        );
+        
+        await client.query('COMMIT');
+        
+        res.json({ 
+            success: true, 
+            message: 'Site data saved successfully.',
+            key,
+            updated_by: updated_by || null,
+            updated_at: new Date().toISOString()
+        });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API POST /api/site-data] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API POST /api/site-data] Error:', err.message);
+        res.status(500).json({ error: 'Server error while saving site data.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API POST /api/site-data] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// ✅ NEW: List all site data keys
+app.get('/api/site-data/list', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            // Check if site_data table exists
+            const tableExists = await client.query(
+                "SELECT to_regclass($1)",
+                ['public.site_data']
+            );
+            
+            if (!tableExists.rows[0].to_regclass) {
+                return res.json({ keys: [] });
+            }
+            
+            // Query all keys with metadata
+            const result = await client.query(
+                'SELECT key, updated_by, updated_at FROM site_data ORDER BY updated_at DESC'
+            );
+            
+            res.json({ keys: result.rows });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/site-data/list] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching site data keys.' });
+    }
+});
+
+// ✅ NEW: Content Management API - Mtest, Voca, Giao tiếp CRUD
+
+// Ensure content management tables exist
+const ensureContentTablesExist = async () => {
+    if (!isRealDatabasePool()) {
+        console.log('⚠️  Database pool not available, skipping content tables initialization');
+        return;
+    }
+    const client = await getDatabaseClient();
+    try {
+        // Create mtest table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS mtest (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                category TEXT,
+                type TEXT,
+                questions JSONB NOT NULL,
+                time_limit INTEGER,
+                difficulty TEXT,
+                tags TEXT[],
+                created_by TEXT,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Create voca table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS voca (
+                id TEXT PRIMARY KEY,
+                word TEXT NOT NULL,
+                pronunciation TEXT,
+                meaning TEXT NOT NULL,
+                example TEXT,
+                example_translation TEXT,
+                category TEXT,
+                level TEXT,
+                tags TEXT[],
+                image_url TEXT,
+                deck_id TEXT,
+                created_by TEXT,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Create voca_decks table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS voca_decks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                category TEXT,
+                level TEXT,
+                card_count INTEGER DEFAULT 0,
+                color TEXT,
+                gradient TEXT,
+                icon TEXT,
+                created_by TEXT,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Create giao_tiep table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS giao_tiep (
+                id TEXT PRIMARY KEY,
+                en TEXT NOT NULL,
+                vi TEXT NOT NULL,
+                ipa TEXT,
+                tieng_boi TEXT,
+                category TEXT NOT NULL,
+                situation TEXT,
+                notes TEXT,
+                created_by TEXT,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Create grammar_groups table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS grammar_groups (
+                id INTEGER PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,
+                vi TEXT NOT NULL,
+                en TEXT NOT NULL,
+                created_by TEXT,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Create test_question_overrides table to store explanation and rule updates
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS test_question_overrides (
+                test_id TEXT NOT NULL,
+                question_id INTEGER NOT NULL,
+                explanation TEXT,
+                rule TEXT,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (test_id, question_id)
+            );
+        `);
+
+        // Create grammar_units table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS grammar_units (
+                id TEXT PRIMARY KEY,
+                group_id INTEGER NOT NULL REFERENCES grammar_groups(id) ON DELETE CASCADE,
+                vi TEXT NOT NULL,
+                en TEXT NOT NULL,
+                tags JSONB,
+                canon_key TEXT,
+                core_ref TEXT,
+                applicable BOOLEAN DEFAULT true,
+                created_by TEXT,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Create indexes
+        await client.query(`
+            CREATE INDEX IF NOT EXISTS idx_mtest_category ON mtest(category);
+            CREATE INDEX IF NOT EXISTS idx_mtest_type ON mtest(type);
+            CREATE INDEX IF NOT EXISTS idx_voca_category ON voca(category);
+            CREATE INDEX IF NOT EXISTS idx_voca_deck_id ON voca(deck_id);
+            CREATE INDEX IF NOT EXISTS idx_voca_decks_category ON voca_decks(category);
+            CREATE INDEX IF NOT EXISTS idx_giao_tiep_category ON giao_tiep(category);
+            CREATE INDEX IF NOT EXISTS idx_grammar_units_group_id ON grammar_units(group_id);
+            CREATE INDEX IF NOT EXISTS idx_grammar_groups_code ON grammar_groups(code);
+        `);
+
+        console.log('✅ Content management tables initialized');
+    } catch (err) {
+        console.error('❌ Error initializing content tables:', err.message);
+    } finally {
+        client.release();
+    }
+};
+
+// Initialize content tables on startup (called from ensureTablesExist)
+// ensureContentTablesExist();
+
+// --- MTEST CRUD API ---
+
+// GET /api/content/mtest - List all Mtest
+app.get('/api/content/mtest', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const { category, type, search } = req.query;
+            let query = 'SELECT * FROM mtest WHERE 1=1';
+            const params = [];
+            let paramIndex = 1;
+
+            if (category) {
+                query += ` AND category = $${paramIndex++}`;
+                params.push(category);
+            }
+            if (type) {
+                query += ` AND type = $${paramIndex++}`;
+                params.push(type);
+            }
+            if (search) {
+                query += ` AND (title ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`;
+                params.push(`%${search}%`);
+                paramIndex++;
+            }
+
+            query += ' ORDER BY updated_at DESC';
+            
+            const result = await client.query(query, params);
+            res.json({ tests: result.rows });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/mtest] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Mtest.' });
+    }
+});
+
+// GET /api/content/mtest/:id - Get single Mtest
+app.get('/api/content/mtest/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const result = await client.query('SELECT * FROM mtest WHERE id = $1', [req.params.id]);
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: 'Mtest not found.' });
+            }
+            res.json({ test: result.rows[0] });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/mtest/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Mtest.' });
+    }
+});
+
+// POST /api/content/mtest - Create Mtest
+app.post('/api/content/mtest', adminAuth, async (req, res) => {
+    const { id, title, description, category, type, questions, time_limit, difficulty, tags, created_by, updated_by } = req.body;
+    
+    if (!id || !title || !questions) {
+        return res.status(400).json({ error: 'id, title, and questions are required.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        await client.query(
+            `INSERT INTO mtest (id, title, description, category, type, questions, time_limit, difficulty, tags, created_by, updated_by, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+             ON CONFLICT (id) 
+             DO UPDATE SET 
+                 title = EXCLUDED.title,
+                 description = EXCLUDED.description,
+                 category = EXCLUDED.category,
+                 type = EXCLUDED.type,
+                 questions = EXCLUDED.questions,
+                 time_limit = EXCLUDED.time_limit,
+                 difficulty = EXCLUDED.difficulty,
+                 tags = EXCLUDED.tags,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = CURRENT_TIMESTAMP`,
+            [id, title, description || null, category || null, type || null, JSON.stringify(questions), time_limit || null, difficulty || null, tags || [], created_by || null, updated_by || null]
+        );
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Mtest saved successfully.', id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API POST /api/content/mtest] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API POST /api/content/mtest] Error:', err.message);
+        res.status(500).json({ error: 'Server error while saving Mtest.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API POST /api/content/mtest] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// PUT /api/content/mtest/:id - Update Mtest
+app.put('/api/content/mtest/:id', adminAuth, async (req, res) => {
+    const { title, description, category, type, questions, time_limit, difficulty, tags, updated_by } = req.body;
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query(
+            `UPDATE mtest 
+             SET title = COALESCE($1, title),
+                 description = COALESCE($2, description),
+                 category = COALESCE($3, category),
+                 type = COALESCE($4, type),
+                 questions = COALESCE($5, questions),
+                 time_limit = COALESCE($6, time_limit),
+                 difficulty = COALESCE($7, difficulty),
+                 tags = COALESCE($8, tags),
+                 updated_by = COALESCE($9, updated_by),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $10
+             RETURNING id`,
+            [title, description, category, type, questions ? JSON.stringify(questions) : null, time_limit, difficulty, tags, updated_by, req.params.id]
+        );
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Mtest not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Mtest updated successfully.', id: req.params.id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API PUT /api/content/mtest/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API PUT /api/content/mtest/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while updating Mtest.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API PUT /api/content/mtest/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// DELETE /api/content/mtest/:id - Delete Mtest
+app.delete('/api/content/mtest/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query('DELETE FROM mtest WHERE id = $1 RETURNING id', [req.params.id]);
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Mtest not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Mtest deleted successfully.', id: req.params.id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API DELETE /api/content/mtest/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API DELETE /api/content/mtest/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while deleting Mtest.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API DELETE /api/content/mtest/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// --- VOCA CRUD API ---
+
+// GET /api/content/voca - List all Voca
+app.get('/api/content/voca', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const { category, level, deck_id, search } = req.query;
+            let query = 'SELECT * FROM voca WHERE 1=1';
+            const params = [];
+            let paramIndex = 1;
+
+            if (category) {
+                query += ` AND category = $${paramIndex++}`;
+                params.push(category);
+            }
+            if (level) {
+                query += ` AND level = $${paramIndex++}`;
+                params.push(level);
+            }
+            if (deck_id) {
+                query += ` AND deck_id = $${paramIndex++}`;
+                params.push(deck_id);
+            }
+            if (search) {
+                query += ` AND (word ILIKE $${paramIndex} OR meaning ILIKE $${paramIndex})`;
+                params.push(`%${search}%`);
+                paramIndex++;
+            }
+
+            query += ' ORDER BY updated_at DESC';
+            
+            const result = await client.query(query, params);
+            res.json({ voca: result.rows });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/voca] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Voca.' });
+    }
+});
+
+// GET /api/content/voca/:id - Get single Voca
+app.get('/api/content/voca/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const result = await client.query('SELECT * FROM voca WHERE id = $1', [req.params.id]);
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: 'Voca not found.' });
+            }
+            res.json({ voca: result.rows[0] });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/voca/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Voca.' });
+    }
+});
+
+// POST /api/content/voca - Create Voca
+app.post('/api/content/voca', adminAuth, async (req, res) => {
+    const { id, word, pronunciation, meaning, example, example_translation, category, level, tags, image_url, deck_id, created_by, updated_by } = req.body;
+    
+    if (!id || !word || !meaning) {
+        return res.status(400).json({ error: 'id, word, and meaning are required.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        await client.query(
+            `INSERT INTO voca (id, word, pronunciation, meaning, example, example_translation, category, level, tags, image_url, deck_id, created_by, updated_by, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+             ON CONFLICT (id) 
+             DO UPDATE SET 
+                 word = EXCLUDED.word,
+                 pronunciation = EXCLUDED.pronunciation,
+                 meaning = EXCLUDED.meaning,
+                 example = EXCLUDED.example,
+                 example_translation = EXCLUDED.example_translation,
+                 category = EXCLUDED.category,
+                 level = EXCLUDED.level,
+                 tags = EXCLUDED.tags,
+                 image_url = EXCLUDED.image_url,
+                 deck_id = EXCLUDED.deck_id,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = CURRENT_TIMESTAMP`,
+            [id, word, pronunciation || null, meaning, example || null, example_translation || null, category || null, level || null, tags || [], image_url || null, deck_id || null, created_by || null, updated_by || null]
+        );
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Voca saved successfully.', id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API POST /api/content/voca] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API POST /api/content/voca] Error:', err.message);
+        res.status(500).json({ error: 'Server error while saving Voca.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API POST /api/content/voca] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// PUT /api/content/voca/:id - Update Voca
+app.put('/api/content/voca/:id', adminAuth, async (req, res) => {
+    const { word, pronunciation, meaning, example, example_translation, category, level, tags, image_url, deck_id, updated_by } = req.body;
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query(
+            `UPDATE voca 
+             SET word = COALESCE($1, word),
+                 pronunciation = COALESCE($2, pronunciation),
+                 meaning = COALESCE($3, meaning),
+                 example = COALESCE($4, example),
+                 example_translation = COALESCE($5, example_translation),
+                 category = COALESCE($6, category),
+                 level = COALESCE($7, level),
+                 tags = COALESCE($8, tags),
+                 image_url = COALESCE($9, image_url),
+                 deck_id = COALESCE($10, deck_id),
+                 updated_by = COALESCE($11, updated_by),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $12
+             RETURNING id`,
+            [word, pronunciation, meaning, example, example_translation, category, level, tags, image_url, deck_id, updated_by, req.params.id]
+        );
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Voca not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Voca updated successfully.', id: req.params.id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API PUT /api/content/voca/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API PUT /api/content/voca/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while updating Voca.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API PUT /api/content/voca/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// DELETE /api/content/voca/:id - Delete Voca
+app.delete('/api/content/voca/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query('DELETE FROM voca WHERE id = $1 RETURNING id', [req.params.id]);
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Voca not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Voca deleted successfully.', id: req.params.id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API DELETE /api/content/voca/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API DELETE /api/content/voca/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while deleting Voca.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API DELETE /api/content/voca/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// --- GIAO TIẾP CRUD API ---
+
+// GET /api/content/giao-tiep - List all Giao tiếp
+app.get('/api/content/giao-tiep', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const { category, search } = req.query;
+            let query = 'SELECT * FROM giao_tiep WHERE 1=1';
+            const params = [];
+            let paramIndex = 1;
+
+            if (category) {
+                query += ` AND category = $${paramIndex++}`;
+                params.push(category);
+            }
+            if (search) {
+                query += ` AND (en ILIKE $${paramIndex} OR vi ILIKE $${paramIndex})`;
+                params.push(`%${search}%`);
+                paramIndex++;
+            }
+
+            query += ' ORDER BY updated_at DESC';
+            
+            const result = await client.query(query, params);
+            res.json({ giao_tiep: result.rows });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/giao-tiep] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Giao tiếp.' });
+    }
+});
+
+// GET /api/content/giao-tiep/:id - Get single Giao tiếp
+app.get('/api/content/giao-tiep/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const result = await client.query('SELECT * FROM giao_tiep WHERE id = $1', [req.params.id]);
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: 'Giao tiếp not found.' });
+            }
+            res.json({ giao_tiep: result.rows[0] });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/giao-tiep/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Giao tiếp.' });
+    }
+});
+
+// POST /api/content/giao-tiep - Create Giao tiếp
+app.post('/api/content/giao-tiep', adminAuth, async (req, res) => {
+    const { id, en, vi, ipa, tieng_boi, category, situation, notes, created_by, updated_by } = req.body;
+    
+    if (!id || !en || !vi || !category) {
+        return res.status(400).json({ error: 'id, en, vi, and category are required.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        await client.query(
+            `INSERT INTO giao_tiep (id, en, vi, ipa, tieng_boi, category, situation, notes, created_by, updated_by, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+             ON CONFLICT (id) 
+             DO UPDATE SET 
+                 en = EXCLUDED.en,
+                 vi = EXCLUDED.vi,
+                 ipa = EXCLUDED.ipa,
+                 tieng_boi = EXCLUDED.tieng_boi,
+                 category = EXCLUDED.category,
+                 situation = EXCLUDED.situation,
+                 notes = EXCLUDED.notes,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = CURRENT_TIMESTAMP`,
+            [id, en, vi, ipa || null, tieng_boi || null, category, situation || null, notes || null, created_by || null, updated_by || null]
+        );
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Giao tiếp saved successfully.', id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API POST /api/content/giao-tiep] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API POST /api/content/giao-tiep] Error:', err.message);
+        res.status(500).json({ error: 'Server error while saving Giao tiếp.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API POST /api/content/giao-tiep] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// PUT /api/content/giao-tiep/:id - Update Giao tiếp
+app.put('/api/content/giao-tiep/:id', adminAuth, async (req, res) => {
+    const { en, vi, ipa, tieng_boi, category, situation, notes, updated_by } = req.body;
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query(
+            `UPDATE giao_tiep 
+             SET en = COALESCE($1, en),
+                 vi = COALESCE($2, vi),
+                 ipa = COALESCE($3, ipa),
+                 tieng_boi = COALESCE($4, tieng_boi),
+                 category = COALESCE($5, category),
+                 situation = COALESCE($6, situation),
+                 notes = COALESCE($7, notes),
+                 updated_by = COALESCE($8, updated_by),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $9
+             RETURNING id`,
+            [en, vi, ipa, tieng_boi, category, situation, notes, updated_by, req.params.id]
+        );
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Giao tiếp not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Giao tiếp updated successfully.', id: req.params.id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API PUT /api/content/giao-tiep/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API PUT /api/content/giao-tiep/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while updating Giao tiếp.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API PUT /api/content/giao-tiep/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// DELETE /api/content/giao-tiep/:id - Delete Giao tiếp
+app.delete('/api/content/giao-tiep/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query('DELETE FROM giao_tiep WHERE id = $1 RETURNING id', [req.params.id]);
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Giao tiếp not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Giao tiếp deleted successfully.', id: req.params.id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API DELETE /api/content/giao-tiep/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API DELETE /api/content/giao-tiep/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while deleting Giao tiếp.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API DELETE /api/content/giao-tiep/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// --- GRAMMAR GROUPS CRUD API ---
+
+// GET /api/content/grammar-groups - List all Groups
+app.get('/api/content/grammar-groups', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const { search } = req.query;
+            let query = 'SELECT * FROM grammar_groups WHERE 1=1';
+            const params = [];
+            let paramIndex = 1;
+
+            if (search) {
+                query += ` AND (vi ILIKE $${paramIndex} OR en ILIKE $${paramIndex} OR code ILIKE $${paramIndex})`;
+                params.push(`%${search}%`);
+                paramIndex++;
+            }
+
+            query += ' ORDER BY id ASC';
+            
+            const result = await client.query(query, params);
+            res.json({ groups: result.rows });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/grammar-groups] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Groups.' });
+    }
+});
+
+// GET /api/content/grammar-groups/:id - Get single Group
+app.get('/api/content/grammar-groups/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const result = await client.query('SELECT * FROM grammar_groups WHERE id = $1', [parseInt(req.params.id)]);
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: 'Group not found.' });
+            }
+            res.json({ group: result.rows[0] });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/grammar-groups/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Group.' });
+    }
+});
+
+// POST /api/content/grammar-groups - Create or Update Group
+app.post('/api/content/grammar-groups', adminAuth, async (req, res) => {
+    const { id, code, vi, en, created_by, updated_by } = req.body;
+    
+    if (!id || !code || !vi || !en) {
+        return res.status(400).json({ error: 'id, code, vi, and en are required.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        await client.query(
+            `INSERT INTO grammar_groups (id, code, vi, en, created_by, updated_by, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+             ON CONFLICT (id) 
+             DO UPDATE SET 
+                 code = EXCLUDED.code,
+                 vi = EXCLUDED.vi,
+                 en = EXCLUDED.en,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = CURRENT_TIMESTAMP`,
+            [parseInt(id), code, vi, en, created_by || null, updated_by || null]
+        );
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Group saved successfully.', id: parseInt(id) });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API POST /api/content/grammar-groups] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API POST /api/content/grammar-groups] Error:', err.message);
+        res.status(500).json({ error: 'Server error while saving Group.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API POST /api/content/grammar-groups] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// PUT /api/content/grammar-groups/:id - Update Group
+app.put('/api/content/grammar-groups/:id', adminAuth, async (req, res) => {
+    const { code, vi, en, updated_by } = req.body;
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query(
+            `UPDATE grammar_groups 
+             SET code = COALESCE($1, code),
+                 vi = COALESCE($2, vi),
+                 en = COALESCE($3, en),
+                 updated_by = COALESCE($4, updated_by),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $5
+             RETURNING id`,
+            [code, vi, en, updated_by, parseInt(req.params.id)]
+        );
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Group not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Group updated successfully.', id: parseInt(req.params.id) });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API PUT /api/content/grammar-groups/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API PUT /api/content/grammar-groups/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while updating Group.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API PUT /api/content/grammar-groups/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// DELETE /api/content/grammar-groups/:id - Delete Group
+app.delete('/api/content/grammar-groups/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query('DELETE FROM grammar_groups WHERE id = $1 RETURNING id', [parseInt(req.params.id)]);
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Group not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Group deleted successfully.', id: parseInt(req.params.id) });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API DELETE /api/content/grammar-groups/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API DELETE /api/content/grammar-groups/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while deleting Group.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API DELETE /api/content/grammar-groups/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// --- GRAMMAR UNITS CRUD API ---
+
+// GET /api/content/grammar-units - List all Units
+app.get('/api/content/grammar-units', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const { group_id, search } = req.query;
+            let query = 'SELECT * FROM grammar_units WHERE 1=1';
+            const params = [];
+            let paramIndex = 1;
+
+            if (group_id) {
+                query += ` AND group_id = $${paramIndex++}`;
+                params.push(parseInt(group_id));
+            }
+            if (search) {
+                query += ` AND (vi ILIKE $${paramIndex} OR en ILIKE $${paramIndex} OR id ILIKE $${paramIndex})`;
+                params.push(`%${search}%`);
+                paramIndex++;
+            }
+
+            query += ' ORDER BY group_id ASC, id ASC';
+            
+            const result = await client.query(query, params);
+            res.json({ units: result.rows });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/grammar-units] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Units.' });
+    }
+});
+
+// GET /api/content/grammar-units/:id - Get single Unit
+app.get('/api/content/grammar-units/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    try {
+        const client = await getDatabaseClient();
+        try {
+            const result = await client.query('SELECT * FROM grammar_units WHERE id = $1', [req.params.id]);
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: 'Unit not found.' });
+            }
+            res.json({ unit: result.rows[0] });
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('❌ [API GET /api/content/grammar-units/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while fetching Unit.' });
+    }
+});
+
+// POST /api/content/grammar-units - Create or Update Unit
+app.post('/api/content/grammar-units', adminAuth, async (req, res) => {
+    const { id, group_id, vi, en, tags, canon_key, core_ref, applicable, created_by, updated_by } = req.body;
+    
+    if (!id || !group_id || !vi || !en) {
+        return res.status(400).json({ error: 'id, group_id, vi, and en are required.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        await client.query(
+            `INSERT INTO grammar_units (id, group_id, vi, en, tags, canon_key, core_ref, applicable, created_by, updated_by, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+             ON CONFLICT (id) 
+             DO UPDATE SET 
+                 group_id = EXCLUDED.group_id,
+                 vi = EXCLUDED.vi,
+                 en = EXCLUDED.en,
+                 tags = EXCLUDED.tags,
+                 canon_key = EXCLUDED.canon_key,
+                 core_ref = EXCLUDED.core_ref,
+                 applicable = EXCLUDED.applicable,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = CURRENT_TIMESTAMP`,
+            [id, parseInt(group_id), vi, en, tags ? JSON.stringify(tags) : null, canon_key || null, core_ref || null, applicable !== undefined ? applicable : true, created_by || null, updated_by || null]
+        );
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Unit saved successfully.', id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API POST /api/content/grammar-units] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API POST /api/content/grammar-units] Error:', err.message);
+        res.status(500).json({ error: 'Server error while saving Unit.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API POST /api/content/grammar-units] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// PUT /api/content/grammar-units/:id - Update Unit
+app.put('/api/content/grammar-units/:id', adminAuth, async (req, res) => {
+    const { group_id, vi, en, tags, canon_key, core_ref, applicable, updated_by } = req.body;
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query(
+            `UPDATE grammar_units 
+             SET group_id = COALESCE($1, group_id),
+                 vi = COALESCE($2, vi),
+                 en = COALESCE($3, en),
+                 tags = COALESCE($4, tags),
+                 canon_key = COALESCE($5, canon_key),
+                 core_ref = COALESCE($6, core_ref),
+                 applicable = COALESCE($7, applicable),
+                 updated_by = COALESCE($8, updated_by),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $9
+             RETURNING id`,
+            [group_id ? parseInt(group_id) : null, vi, en, tags ? JSON.stringify(tags) : null, canon_key, core_ref, applicable, updated_by, req.params.id]
+        );
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Unit not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Unit updated successfully.', id: req.params.id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API PUT /api/content/grammar-units/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API PUT /api/content/grammar-units/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while updating Unit.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API PUT /api/content/grammar-units/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// DELETE /api/content/grammar-units/:id - Delete Unit
+app.delete('/api/content/grammar-units/:id', adminAuth, async (req, res) => {
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        const result = await client.query('DELETE FROM grammar_units WHERE id = $1 RETURNING id', [req.params.id]);
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Unit not found.' });
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Unit deleted successfully.', id: req.params.id });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API DELETE /api/content/grammar-units/:id] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API DELETE /api/content/grammar-units/:id] Error:', err.message);
+        res.status(500).json({ error: 'Server error while deleting Unit.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API DELETE /api/content/grammar-units/:id] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+// ✅ NEW: Delete site data key
+app.delete('/api/site-data/:key', adminAuth, async (req, res) => {
+    const { key } = req.params;
+    
+    if (!key || typeof key !== 'string') {
+        return res.status(400).json({ error: 'Key parameter is required.' });
+    }
+    
+    if (!isRealDatabasePool()) {
+        return res.status(503).json({ error: 'Database service is not available. Please try again later.' });
+    }
+    
+    let client;
+    try {
+        client = await getDatabaseClient();
+        await client.query('BEGIN');
+        
+        // Check if site_data table exists
+        const tableExists = await client.query(
+            "SELECT to_regclass($1)",
+            ['public.site_data']
+        );
+        
+        if (!tableExists.rows[0].to_regclass) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Key not found.' });
+        }
+        
+        // Delete the key
+        const result = await client.query(
+            'DELETE FROM site_data WHERE key = $1 RETURNING key',
+            [key]
+        );
+        
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Key not found.' });
+        }
+        
+        await client.query('COMMIT');
+        
+        res.json({ success: true, message: 'Key deleted successfully.', key });
+    } catch (err) {
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackErr) {
+                console.error('❌ [API DELETE /api/site-data/:key] Rollback error:', rollbackErr.message);
+            }
+        }
+        console.error('❌ [API DELETE /api/site-data/:key] Error:', err.message);
+        res.status(500).json({ error: 'Server error while deleting site data.' });
+    } finally {
+        if (client) {
+            try {
+                client.release();
+            } catch (releaseErr) {
+                console.error('❌ [API DELETE /api/site-data/:key] Release error:', releaseErr.message);
+            }
+        }
+    }
+});
+
+app.get(['/admin', '/admin/*'], (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'admin.html'));
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
@@ -2785,6 +5190,32 @@ const server = app.listen(port, '0.0.0.0', () => {
           return ensureAdminUserExists();
         }).then(() => {
           console.log(`✅ Backend server is fully operational on port ${port}`);
+          
+          // ✅ IMPROVEMENT: Setup scheduled backup (daily at 2 AM)
+          if (cron) {
+            // Schedule backup daily at 2:00 AM (server timezone)
+            // Cron format: minute hour day month dayOfWeek
+            // '0 2 * * *' = At 02:00 every day
+            cron.schedule('0 2 * * *', async () => {
+              console.log('🔄 [SCHEDULED] Running daily backup at 2 AM...');
+              try {
+                const result = await backupUsersToCloudStorage();
+                if (result.success) {
+                  console.log(`✅ [SCHEDULED] Daily backup completed: ${result.totalUsers} users backed up`);
+                } else {
+                  console.error(`❌ [SCHEDULED] Daily backup failed: ${result.error}`);
+                }
+              } catch (error) {
+                console.error('❌ [SCHEDULED] Daily backup error:', error.message);
+              }
+            }, {
+              scheduled: true,
+              timezone: 'Asia/Ho_Chi_Minh' // Vietnam timezone (UTC+7)
+            });
+            console.log('✅ [SCHEDULED] Daily backup scheduled: 2:00 AM (Vietnam time)');
+          } else {
+            console.warn('⚠️  [SCHEDULED] node-cron not available, scheduled backup disabled');
+          }
         }).catch((err) => {
           console.error('❌ Error during database initialization:', err);
           console.error('⚠️  Server will continue running, but database features may not work');

@@ -1,0 +1,986 @@
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { 
+  DocumentTextIcon,
+  LightBulbIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ArrowLeftIcon,
+  MapPinIcon,
+  TrophyIcon,
+  PlusIcon,
+  MinusIcon,
+  ChartBarIcon,
+  ArrowsPointingOutIcon,
+  ArrowsPointingInIcon,
+  InformationCircleIcon
+} from '@heroicons/react/24/outline';
+import { toeicPart6Test2_2019, Part6Passage, Part6Question } from '../data/toeic-part6-test2-2019-data';
+import SuperGrandBananaCelebration from '../components/SuperGrandBananaCelebration';
+import { useAuth } from '../contexts/AuthContext';
+import { addBananasForUser, rewardBananaForTest } from '../services/userService';
+
+// Extract passage1 (questions 131-134) from toeicPart6Test2_2019
+const card131_134_Passage = toeicPart6Test2_2019.passages.find(p => p.id === 'toeic-part6-test2-2019-passage1');
+
+const TOEICPart6Test2_2019_Card131_134: React.FC = () => {
+  const navigate = useNavigate();
+  const { currentUser, updateUser } = useAuth();
+  
+  // Use only passage1 (questions 131-134)
+  const selectedPassage = card131_134_Passage;
+  
+  // Collect questions from passage1 only
+  const allQuestions = useMemo(() => {
+    if (!selectedPassage) return [];
+    const questions: Array<{ question: Part6Question; passage: Part6Passage; questionIndex: number; passageIndex: number }> = [];
+    selectedPassage.questions.forEach((q, qIdx) => {
+      questions.push({ question: q, passage: selectedPassage, questionIndex: qIdx, passageIndex: 0 });
+    });
+    return questions;
+  }, [selectedPassage]);
+  
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const currentQuestionData = allQuestions[currentQuestionIndex];
+  
+  if (!selectedPassage || !currentQuestionData || allQuestions.length === 0) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-600">No passage data available.</p>
+          <button
+            onClick={() => navigate('/toeic-part6-by-year')}
+            className="mt-4 px-6 py-3 bg-gradient-to-r from-gray-900 to-gray-800 text-white rounded-2xl font-semibold hover:opacity-90 transition-opacity"
+          >
+            Quay lại Part 6
+          </button>
+        </div>
+      </div>
+    );
+  }  
+  co
+nst [selectedAnswers, setSelectedAnswers] = useState<{ [key: number]: 'a' | 'b' | 'c' | 'd' }>({});
+  const [showExplanation, setShowExplanation] = useState(false);
+  const [selectedVocabulary, setSelectedVocabulary] = useState<string | null>(null);
+  const [highlightAnswer, setHighlightAnswer] = useState(false);
+  const [showTranslationModal, setShowTranslationModal] = useState(false);
+  const [showMatchingGame, setShowMatchingGame] = useState(false);
+  const [matchedPairs, setMatchedPairs] = useState<Record<string, string>>({});
+  const [selectedLeft, setSelectedLeft] = useState<string | null>(null);
+  const [selectedRight, setSelectedRight] = useState<string | null>(null);
+  const [wrongMatch, setWrongMatch] = useState<string | null>(null);
+  const [matchingGameScore, setMatchingGameScore] = useState(0);
+  const [matchingGameBananaRewarded, setMatchingGameBananaRewarded] = useState(false);
+  const [score, setScore] = useState(0);
+  const [gameOver, setGameOver] = useState(false);
+  const [showReviewMode, setShowReviewMode] = useState(false);
+  const [showBananaReward, setShowBananaReward] = useState(false);
+  const [bananaReward, setBananaReward] = useState<{ courseId: string; lessonId: string; earned: boolean; earnedAt: string; score: number; totalQuestions: number; percentage: number } | null>(null);
+  const [animatedPercentage, setAnimatedPercentage] = useState(0);
+  const animationFrameRef = useRef<number | null>(null);
+  const startValueRef = useRef(0);
+  const leftColumnRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const rightColumnRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const matchingGameScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  
+  // Fullscreen and font size states
+  const [fullscreenColumn, setFullscreenColumn] = useState<'vocab' | 'passage' | 'questions' | null>(null);
+  const [fontSizeVocab, setFontSizeVocab] = useState(100);
+  const [fontSizePassage, setFontSizePassage] = useState(100);
+  const [fontSizeQuestions, setFontSizeQuestions] = useState(100);
+  
+  // Resizable columns state
+  const [colWidths, setColWidths] = useState({ vocab: 1, passage: 2, questions: 2 });
+  const [isResizing, setIsResizing] = useState<'vocab-passage' | 'passage-questions' | null>(null);
+  
+  // Resize handlers
+  const handleMouseDown = (divider: 'vocab-passage' | 'passage-questions') => (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(divider);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const container = document.querySelector('.resizable-container');
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      const containerWidth = rect.width;
+      const mouseX = e.clientX - rect.left;
+      const percentage = mouseX / containerWidth;
+
+      if (isResizing === 'vocab-passage') {
+        const newVocabWidth = Math.max(0.5, Math.min(2, percentage * 5));
+        const remaining = 5 - newVocabWidth;
+        const passageRatio = colWidths.passage / (colWidths.passage + colWidths.questions);
+        const newPassageWidth = remaining * passageRatio;
+        const newQuestionsWidth = remaining * (1 - passageRatio);
+        
+        setColWidths({
+          vocab: newVocabWidth,
+          passage: newPassageWidth,
+          questions: newQuestionsWidth
+        });
+      } else if (isResizing === 'passage-questions') {
+        const newPassageWidth = Math.max(0.5, Math.min(3.5, percentage * 5 - colWidths.vocab));
+        const newQuestionsWidth = 5 - colWidths.vocab - newPassageWidth;
+        
+        if (newQuestionsWidth >= 0.5) {
+          setColWidths({
+            vocab: colWidths.vocab,
+            passage: newPassageWidth,
+            questions: newQuestionsWidth
+          });
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(null);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, colWidths]);
+
+  const currentQuestion = currentQuestionData.question;
+  const isAnswered = selectedAnswers[currentQuestion.id] !== undefined;
+  const selectedAnswer = selectedAnswers[currentQuestion.id];
+  const isCorrect = selectedAnswer !== undefined && selectedAnswer === currentQuestion.correctAnswer;
+
+  // Use vocabulary from data file
+  const uniqueVocabulary = useMemo(() => {
+    if (!selectedPassage.vocabulary) return [];
+    const seen = new Set<string>();
+    const result: Array<{
+      word: string;
+      definition: string;
+      definition_vi: string;
+      meaning: string;
+      location: string;
+      level?: string;
+      pos?: string;
+      ipa?: string;
+      synonyms: string[];
+    }> = [];
+    
+    selectedPassage.vocabulary.forEach((v) => {
+      const key = v.word.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push({
+          word: v.word,
+          definition: v.definition,
+          definition_vi: v.definition_vi,
+          meaning: v.definition_vi, // Map definition_vi to meaning
+          location: v.location,
+          level: v.level,
+          pos: v.pos,
+          ipa: v.ipa,
+          synonyms: Array.isArray(v.synonyms) ? v.synonyms : []
+        });
+      }
+    });
+    
+    return result;
+  }, [selectedPassage]);
+
+  // Highlight vocabulary and blanks in passage
+  const highlightPassage = useCallback((text: string, highlightAnswers: boolean = false) => {
+    let highlighted = text;
+    
+    // First, highlight vocabulary words (only the first 25, matching column 1)
+    const vocabToProcess = highlightAnswers
+      ? uniqueVocabulary.slice(0, 25).filter(v => v.word === selectedVocabulary)
+      : uniqueVocabulary.slice(0, 25);
+
+    vocabToProcess.forEach(vocab => {
+      const escapedWord = vocab.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Handle words with hyphens (like "plant-based") - also match "Plant Based" (capitalized, no hyphen)
+      const hasHyphen = vocab.word.includes('-');
+      let regex: RegExp;
+      
+      if (hasHyphen) {
+        // For hyphenated words, also try matching without hyphen and with spaces
+        const wordWithoutHyphen = vocab.word.replace(/-/g, ' ');
+        const escapedWordWithoutHyphen = wordWithoutHyphen.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Match both "plant-based" and "Plant Based" (case insensitive)
+        regex = new RegExp(`(^|[^\\w-])(${escapedWord}|${escapedWordWithoutHyphen})(?![\\w-])`, 'gi');
+      } else {
+        // For regular words, use word boundary - be more flexible to catch all occurrences
+        // Try both word boundary and non-word character approach
+        regex = new RegExp(`(^|[^\\w])(${escapedWord})(?![\\w])`, 'gi');
+      }
+      
+      const isSelected = selectedVocabulary === vocab.word;
+      let matchFound = false;
+      
+      highlighted = highlighted.replace(regex, (match, prefix, wordMatch) => {
+        matchFound = true;
+        // prefix is the character before the word (or empty string at start)
+        // wordMatch is the actual word matched (could be hyphenated or spaced version)
+        if (isSelected) {
+          return `${prefix || ''}<span class="vocab-word cursor-pointer text-white font-bold underline decoration-2 decoration-white bg-blue-600 px-1.5 py-0.5 rounded shadow-lg border-2 border-blue-700 hover:bg-blue-700 transition-all duration-200" data-word="${vocab.word}" style="opacity: 1 !important; filter: none !important;" title="Click to scroll to vocabulary in sidebar">${wordMatch}</span>`;
+        }
+        return `${prefix || ''}<span class="vocab-word cursor-pointer text-blue-600 font-semibold underline decoration-2 decoration-blue-400 hover:bg-blue-100 px-1 rounded transition-all duration-200" data-word="${vocab.word}" title="Click to scroll to vocabulary in sidebar">${wordMatch}</span>`;
+      });
+      
+      // If word not found in passage, it might be in questions/options - skip for now
+      // (We only highlight words that appear in the passage content)
+    });
+    
+    // Then, highlight blanks
+    // Sort questions by blankNumber to ensure correct order
+    const sortedQuestions = [...selectedPassage.questions].sort((a, b) => a.blankNumber - b.blankNumber);
+    
+    sortedQuestions.forEach((q) => {
+      const blankPattern = `............`;
+      const escapedPattern = blankPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const isCurrentBlank = q.id === currentQuestion.id;
+      const userAnswer = selectedAnswers[q.id];
+      const isCorrectAnswer = userAnswer !== undefined && userAnswer === q.correctAnswer;
+      
+      // Use non-global regex to replace only the first occurrence (the blank for this question)
+      const regex = new RegExp(escapedPattern);
+      
+      if (highlightAnswers && userAnswer !== undefined) {
+        const answerText = q.options.find(opt => opt.value === userAnswer)?.text || '';
+        const isCurrent = q.id === currentQuestion.id;
+        // Much more visible colors with high contrast
+        const colorClass = isCorrectAnswer 
+          ? `bg-green-600 border-4 border-green-800 text-white ring-4 ring-green-400 shadow-2xl` 
+          : `bg-red-600 border-4 border-red-800 text-white ring-4 ring-red-400 shadow-2xl`;
+        // Add prominent shadow effect for correct answers (no animation)
+        const glowStyle = isCorrectAnswer
+          ? 'box-shadow: 0 0 20px rgba(34, 197, 94, 0.6), 0 0 40px rgba(34, 197, 94, 0.4), 0 4px 12px rgba(0,0,0,0.3);'
+          : 'box-shadow: 0 0 20px rgba(220, 38, 38, 0.6), 0 0 40px rgba(220, 38, 38, 0.4), 0 4px 12px rgba(0,0,0,0.3);';
+        // Make correct answers super prominent with bold styling but no scale to preserve text flow
+        highlighted = highlighted.replace(
+          regex,
+          `<span class="blank-highlight ${colorClass} font-extrabold px-4 py-2 rounded-xl cursor-pointer transition-all duration-300 inline-block" data-question-id="${q.id}" style="font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif; font-size: 1.1em; font-weight: 900; text-shadow: 0 2px 4px rgba(0,0,0,0.6); ${glowStyle} margin: 2px 4px; vertical-align: baseline;">[${q.blankNumber}] ${answerText}</span>`
+        );
+      } else if (isCurrentBlank) {
+        highlighted = highlighted.replace(
+          regex,
+          `<span class="blank-highlight bg-blue-100/80 border-blue-500/50 text-blue-900 font-semibold px-3 py-1.5 rounded-xl border shadow-sm cursor-pointer ring-2 ring-blue-200/50" data-question-id="${q.id}" style="font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;">[${q.blankNumber}]</span>`
+        );
+      } else {
+        highlighted = highlighted.replace(
+          regex,
+          `<span class="blank-highlight bg-yellow-100/60 border-yellow-400/50 text-yellow-900 font-semibold px-3 py-1.5 rounded-xl border cursor-pointer transition-all duration-200 hover:bg-yellow-100/80 hover:scale-105" data-question-id="${q.id}" style="font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;">[${q.blankNumber}]</span>`
+        );
+      }
+    });
+    
+    return highlighted;
+  }, [selectedPassage, currentQuestion, selectedAnswers, uniqueVocabulary, selectedVocabulary]);
+
+  const handleVocabularyClick = (word: string) => {
+    setSelectedVocabulary(selectedVocabulary === word ? null : word);
+    
+    // Scroll to vocabulary word in passage (column 2)
+    if (passageRef.current) {
+      const wordElement = passageRef.current.querySelector(`[data-word="${word}"]`);
+      if (wordElement) {
+        wordElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
+
+  // Handle click on vocabulary word in passage (column 2) - scroll to sidebar (column 1)
+  const handlePassageVocabularyClick = (word: string) => {
+    setSelectedVocabulary(selectedVocabulary === word ? null : word);
+    
+    // Scroll to vocabulary word in sidebar (column 1)
+    if (vocabSidebarRef.current) {
+      const wordElement = vocabSidebarRef.current.querySelector(`[data-sidebar-word="${word}"]`);
+      if (wordElement) {
+        wordElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
+
+  const passageRef = useRef<HTMLDivElement>(null);
+  const vocabSidebarRef = useRef<HTMLDivElement>(null);
+
+  // Add event listeners for vocabulary words in passage
+  useEffect(() => {
+    if (!passageRef.current) return;
+
+    const handleVocabClick = (event: Event) => {
+      const target = event.target as HTMLElement;
+      if (target.classList.contains('vocab-word')) {
+        const word = target.getAttribute('data-word');
+        if (word) {
+          handlePassageVocabularyClick(word);
+        }
+      }
+    };
+
+    const passageElement = passageRef.current;
+    passageElement.addEventListener('click', handleVocabClick);
+
+    return () => {
+      passageElement.removeEventListener('click', handleVocabClick);
+    };
+  }, [selectedPassage.content, highlightAnswer, selectedVocabulary]);
+
+  // Scroll to blank when question changes
+  useEffect(() => {
+    if (passageRef.current && currentQuestion) {
+      const blankElement = passageRef.current.querySelector(`[data-question-id="${currentQuestion.id}"]`);
+      if (blankElement) {
+        setTimeout(() => {
+          blankElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+      }
+    }
+  }, [currentQuestionIndex, currentQuestion]);
+
+  // Tự động hiển thị giải thích nếu đã có đáp án
+  useEffect(() => {
+    if (isAnswered && !showExplanation) {
+      setShowExplanation(true);
+    }
+  }, [isAnswered, showExplanation]);
+
+  // Handle click on blank to navigate to question
+  useEffect(() => {
+    const handleBlankClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const blankElement = target.closest('[data-question-id]');
+      if (blankElement) {
+        const questionId = parseInt(blankElement.getAttribute('data-question-id') || '0');
+        const questionIndex = allQuestions.findIndex(({ question: q }) => q.id === questionId);
+        if (questionIndex >= 0) {
+          setCurrentQuestionIndex(questionIndex);
+        }
+      }
+    };
+
+    if (passageRef.current) {
+      passageRef.current.addEventListener('click', handleBlankClick);
+      return () => {
+        if (passageRef.current) {
+          passageRef.current.removeEventListener('click', handleBlankClick);
+        }
+      };
+    }
+  }, [allQuestions]);
+
+  // Scroll to answer location
+  const scrollToAnswer = () => {
+    setHighlightAnswer(true);
+    setTimeout(() => {
+      if (passageRef.current) {
+        // Find the current question's blank element
+        const answerElement = passageRef.current.querySelector(`[data-question-id="${currentQuestion.id}"]`);
+        if (answerElement) {
+          answerElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Add a temporary flash effect
+          answerElement.classList.add('animate-bounce');
+          setTimeout(() => {
+            answerElement.classList.remove('animate-bounce');
+          }, 1000);
+        }
+      }
+    }, 100);
+  };
+
+  // Calculate score
+  useEffect(() => {
+    let newScore = 0;
+    allQuestions.forEach(({ question: q }) => {
+      const answer = selectedAnswers[q.id];
+      if (answer !== undefined && answer === q.correctAnswer) {
+        newScore++;
+      }
+    });
+    setScore(newScore);
+  }, [selectedAnswers, allQuestions]);
+
+  const percentage = Math.round((score / allQuestions.length) * 100);
+  
+  // Animate percentage smoothly
+  useEffect(() => {
+    const duration = 800; // Animation duration in ms
+    const endValue = percentage;
+    
+    // Cancel previous animation if exists
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    
+    startValueRef.current = animatedPercentage;
+    const startValue = startValueRef.current;
+    const difference = endValue - startValue;
+    
+    if (difference === 0) return;
+    
+    const startTime = Date.now();
+    const animate = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // Easing function for smooth animation
+      const easeOutQuad = 1 - (1 - progress) * (1 - progress);
+      const currentValue = Math.round(startValue + difference * easeOutQuad);
+      
+      setAnimatedPercentage(currentValue);
+      
+      if (progress < 1) {
+        animationFrameRef.current = requestAnimationFrame(animate);
+      } else {
+        setAnimatedPercentage(endValue);
+        animationFrameRef.current = null;
+      }
+    };
+    
+    animationFrameRef.current = requestAnimationFrame(animate);
+    
+    // Cleanup function
+    return () => {
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [percentage, animatedPercentage]);
+
+  // Handle answer selection
+  const handleAnswerSelect = useCallback((value: 'a' | 'b' | 'c' | 'd') => {
+    if (gameOver || showReviewMode) return;
+    const isCorrect = value === currentQuestion.correctAnswer;
+    
+    setSelectedAnswers((prev) => ({
+      ...prev,
+      [currentQuestion.id]: value
+    }));
+    setShowExplanation(true);
+    
+    // If answer is correct, automatically highlight and scroll to answer in passage
+    if (isCorrect) {
+      setHighlightAnswer(true);
+      // Scroll to answer location after a short delay to allow DOM update
+      setTimeout(() => {
+        if (passageRef.current) {
+          const answerElement = passageRef.current.querySelector(`[data-question-id="${currentQuestion.id}"]`);
+          if (answerElement) {
+            answerElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Add bounce animation
+            answerElement.classList.add('animate-bounce');
+            setTimeout(() => {
+              answerElement.classList.remove('animate-bounce');
+            }, 2000);
+          }
+        }
+      }, 100);
+    }
+  }, [currentQuestion.id, currentQuestion.correctAnswer, gameOver, showReviewMode]);
+
+  // Handle complete test
+  const handleComplete = useCallback(async () => {
+    setGameOver(true);
+    
+    let currentScore = 0;
+    allQuestions.forEach(({ question: q }) => {
+      const answer = selectedAnswers[q.id];
+      if (answer !== undefined && answer === q.correctAnswer) {
+        currentScore++;
+      }
+    });
+    
+    setScore(currentScore);
+    const percentage = Math.round((currentScore / allQuestions.length) * 100);
+    const lessonId = 'part6-test2-2019-card131-134';
+    
+    // Reward banana if >= 80%
+    if (percentage >= 80 && currentUser) {
+      try {
+        const updatedUser = await rewardBananaForTest(
+          currentUser.id,
+          currentScore,
+          allQuestions.length,
+          currentUser
+        );
+        if (updatedUser) {
+          updateUser(updatedUser);
+        }
+        setBananaReward({ 
+          courseId: 'toeic', 
+          lessonId, 
+          earned: true, 
+          earnedAt: new Date().toISOString(), 
+          score: currentScore, 
+          totalQuestions: allQuestions.length, 
+          percentage 
+        });
+        setShowBananaReward(true);
+      } catch (error) {
+        console.error('Failed to add banana to user balance:', error);
+      }
+    }
+  }, [selectedAnswers, allQuestions, currentUser, updateUser]);
+
+  return (
+
+    <div 
+      className="bg-gradient-to-br from-gray-50 via-white to-gray-50 -m-8 p-8 pt-12 min-h-screen" 
+      style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif' }}
+    >
+      {/* Banana Reward Celebration */}
+      {showBananaReward && bananaReward && (
+        <SuperGrandBananaCelebration
+          isOpen={showBananaReward}
+          onClose={() => setShowBananaReward(false)}
+          course="toeic"
+          lessonId="part6-test2-2019-card131-134"
+          score={bananaReward.score}
+          totalQuestions={bananaReward.totalQuestions}
+          percentage={bananaReward.percentage}
+          isNewReward={bananaReward.earned}
+        />
+      )}
+
+      {/* Header - Compact Design with Integrated Banana Reward */}
+      <div className="sticky top-[96px] z-50 backdrop-blur-xl bg-white/90 border-b border-gray-200/50 shadow-sm mb-4 -mx-8 px-6 py-3">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          {/* Left: Back button + Title */}
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <button
+              onClick={() => navigate('/toeic-part6-by-year')}
+              className="p-1.5 hover:bg-gray-100 rounded-full transition-all duration-200 active:scale-95 flex-shrink-0"
+              title="Quay lại"
+              aria-label="Quay lại"
+            >
+              <ArrowLeftIcon className="w-5 h-5 text-gray-700" />
+            </button>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 tracking-tight truncate">
+                TOEIC Part 6 - 2019 Test 2 (131-134)
+              </h1>
+              <p className="text-xs text-gray-500 truncate">
+                Garden Shade Tree Landscaping - Questions 131-134 refer to the following advertisement.
+              </p>
+            </div>
+          </div>
+
+          {/* Center: Compact Banana Progress Bar */}
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-yellow-50/80 via-orange-50/80 to-yellow-50/80 rounded-lg border border-yellow-200/50 flex-shrink-0">
+            <span className="text-sm">🍌</span>
+            <div className="flex items-center gap-1.5">
+              <div className="w-20 relative">
+                <div className="bg-gray-200 rounded-full h-1.5 shadow-inner">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ease-out ${
+                      animatedPercentage >= 80
+                        ? 'bg-gradient-to-r from-orange-400 to-red-500'
+                        : animatedPercentage >= 60
+                        ? 'bg-gradient-to-r from-orange-300 to-red-400'
+                        : 'bg-gradient-to-r from-orange-200 to-orange-400'
+                    }`}
+                    style={{ width: `${Math.min(animatedPercentage, 100)}%` }}
+                  />
+                </div>
+              </div>
+              <span className="text-xs font-bold text-orange-600 min-w-[35px]">{animatedPercentage}%</span>
+              {animatedPercentage >= 80 ? (
+                <span className="text-[10px] text-green-600 font-semibold">✓</span>
+              ) : (
+                <span className="text-[10px] text-gray-500">{80 - animatedPercentage}%</span>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Score + Buttons */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-xl border border-gray-200/50 shadow-sm">
+              <TrophyIcon className="w-4 h-4 text-green-600" />
+              <span className="text-sm font-semibold text-gray-900">{score}/{allQuestions.length}</span>
+            </div>
+            <button
+              onClick={() => {
+                localStorage.setItem('toeic-part6-test2-2019-card131-134-answers', JSON.stringify(selectedAnswers));
+                navigate('/toeic-part6-test2-2019-card131-134-explanation', {
+                  state: { selectedAnswers, passage: selectedPassage }
+                });
+              }}
+              className="px-3 py-1.5 bg-red-600 text-white rounded-xl text-sm font-semibold hover:bg-red-700 transition-all duration-200 active:scale-95 shadow-sm whitespace-nowrap"
+              style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif' }}
+            >
+              Giải chi tiết
+            </button>
+            <button
+              onClick={handleComplete}
+              disabled={!allQuestions.every(({ question: q }) => selectedAnswers[q.id] !== undefined)}
+              className="px-4 py-1.5 bg-gray-900 text-white rounded-xl text-sm font-semibold hover:bg-gray-800 transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm disabled:shadow-none whitespace-nowrap"
+              style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif' }}
+            >
+              Hoàn thành
+            </button>
+          </div>
+        </div>
+      </div>        
+
+<div className="resizable-container flex gap-0">
+          {/* Vocabulary Sidebar - Column 1 - Apple 2025 Style */}
+          <div 
+            ref={vocabSidebarRef}
+            className={`${fullscreenColumn === 'vocab' ? 'fixed inset-0 z-50' : 'hidden lg:block sticky top-[200px] h-[calc(100vh-220px)]'} bg-white/80 backdrop-blur-xl rounded-2xl shadow-lg border border-gray-200/50 p-5 pb-12 overflow-y-auto hide-scrollbar`}
+            style={{ 
+              fontSize: `${fontSizeVocab}%`,
+              flex: fullscreenColumn ? undefined : `${colWidths.vocab} 1 0%`,
+              minWidth: fullscreenColumn ? undefined : '200px',
+              fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif'
+            }}
+          >
+            
+            {/* Matching Game Toggle */}
+            <div className="mb-4 pb-4 border-b border-gray-200/50">
+              <button
+                onClick={() => setShowMatchingGame(!showMatchingGame)}
+                className="w-full px-4 py-3 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-2xl font-semibold hover:from-green-700 hover:to-green-800 transition-all duration-200 shadow-md hover:shadow-lg active:scale-[0.98]"
+                style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif' }}
+              >
+                {showMatchingGame ? 'Ẩn Matching Game' : 'Matching Game (25 từ)'}
+              </button>
+            </div>
+            
+            <div className="space-y-2.5">
+              {uniqueVocabulary.slice(0, 25).map((vocab, idx) => (
+                <div
+                  key={`${vocab.word}-${idx}`}
+                  data-sidebar-word={vocab.word}
+                  onClick={() => {
+                    // When clicking word in sidebar (column 1), highlight it in passage (column 2)
+                    handleVocabularyClick(vocab.word);
+                  }}
+                  title="Click to highlight and scroll to word in passage"
+                  className={`group cursor-pointer p-3.5 rounded-2xl border transition-all duration-200 active:scale-[0.98] ${
+                    selectedVocabulary === vocab.word
+                      ? 'bg-green-50 border-green-400 shadow-md ring-2 ring-green-300'
+                      : 'border-gray-200/50 bg-white/50 hover:bg-white hover:border-gray-300 hover:shadow-sm'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <p className="font-semibold text-gray-900 tracking-tight flex items-center gap-2.5">
+                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold">
+                        {idx + 1}
+                      </span>
+                      <span>{vocab.word}</span>
+                      {vocab.pos && (
+                        <span className="text-xs text-gray-500 font-medium bg-gray-100 px-1.5 py-0.5 rounded">
+                          {vocab.pos}
+                        </span>
+                      )}
+                    </p>
+                    {vocab.level && (
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${
+                        vocab.level === 'A2' ? 'bg-green-100 text-green-700 border-green-200' :
+                        vocab.level === 'B1' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                        vocab.level === 'B2' ? 'bg-purple-100 text-purple-700 border-purple-200' :
+                        vocab.level === 'C1' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                        'bg-red-100 text-red-700 border-red-200'
+                      }`}>
+                        {vocab.level}
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* IPA + Vietnamese */}
+                  {(vocab.ipa || vocab.definition_vi) && (
+                    <div className="text-sm text-gray-700 leading-relaxed">
+                      {vocab.ipa && (
+                        <span className="mr-2 text-gray-500 font-mono text-xs">/{vocab.ipa.replace(/\//g, '')}/</span>
+                      )}
+                      <span className="text-gray-800">{vocab.definition_vi}</span>
+                    </div>
+                  )}
+                  
+                  {/* English Definition */}
+                  <div className="mt-1 text-xs text-gray-600 leading-relaxed">
+                    {vocab.definition}
+                  </div>
+                  
+                  {/* Synonyms */}
+                  {Array.isArray(vocab.synonyms) && vocab.synonyms.length > 0 && (
+                    <div className="mt-1.5 text-xs text-gray-500">
+                      ≈ {vocab.synonyms.slice(0, 3).join(', ')}
+                    </div>
+                  )}
+                  
+                  {/* Location */}
+                  <div className="mt-1.5 text-xs text-gray-400 italic">
+                    📍 {vocab.location}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>   
+       {/* Resize Handle 1: Between Vocab and Passage */}
+          {!fullscreenColumn && (
+            <div
+              className="hidden lg:flex items-center justify-center w-2 cursor-col-resize bg-gray-200 hover:bg-orange-400 transition-colors relative group"
+              onMouseDown={handleMouseDown('vocab-passage')}
+              style={{ userSelect: 'none' }}
+            >
+              <div className="absolute inset-y-0 w-1 bg-orange-600 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+              <div className="absolute top-1/2 -translate-y-1/2 text-gray-500 group-hover:text-orange-700 text-xs font-bold">⋮</div>
+            </div>
+          )}
+
+          {/* Passage Display - Column 2 */}
+          <div 
+            ref={passageRef}
+            className={`${fullscreenColumn === 'passage' ? 'fixed inset-0 z-50' : 'hidden lg:block sticky top-24 lg:h-[calc(100vh-140px)]'} bg-white shadow-lg p-3 pb-12 space-y-4 lg:overflow-y-auto overflow-x-hidden hide-scrollbar`}
+            style={{ 
+              fontSize: `${fontSizePassage}%`,
+              flex: fullscreenColumn ? undefined : `${colWidths.passage} 1 0%`,
+              minWidth: fullscreenColumn ? undefined : '300px'
+            }}
+          >
+            {/* Passage Title */}
+            <div className="mb-4">
+              <h2 className="text-lg font-bold text-gray-800 mb-2">{selectedPassage.title}</h2>
+              <div className="w-full h-px bg-gradient-to-r from-gray-300 via-gray-400 to-gray-300"></div>
+            </div>
+
+            {/* Passage Body */}
+            <div 
+              className="mt-4 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap"
+              dangerouslySetInnerHTML={{ __html: highlightPassage(selectedPassage.content || '', highlightAnswer) }}
+            />
+
+            {/* Vietnamese Translation */}
+            {selectedPassage.content_vi && (
+              <div className="mt-4">
+                <details>
+                  <summary className="flex items-center justify-between gap-3 cursor-pointer text-sm text-orange-600 font-semibold hover:text-orange-700">
+                    <span>Xem bản dịch tiếng Việt</span>
+                  </summary>
+                  <div className="mt-2 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap bg-gray-50 p-3 rounded">
+                    {selectedPassage.content_vi}
+                  </div>
+                </details>
+              </div>
+            )}
+
+            {/* Vocabulary Popup */}
+            {selectedVocabulary && uniqueVocabulary.find(v => v.word === selectedVocabulary) && (
+              <div className="mt-4 p-4 bg-orange-50 border-l-4 border-orange-500 rounded-r-lg">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    {(() => {
+                      const selectedVocab = uniqueVocabulary.find(v => v.word === selectedVocabulary);
+                      if (!selectedVocab) return null;
+                      
+                      return (
+                        <>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <h3 className="font-bold text-orange-900 text-lg">{selectedVocab.word}</h3>
+                            {selectedVocab.level && (
+                              <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                selectedVocab.level === 'A2' ? 'bg-green-500 text-white' :
+                                selectedVocab.level === 'B1' ? 'bg-blue-500 text-white' :
+                                selectedVocab.level === 'B2' ? 'bg-purple-500 text-white' :
+                                selectedVocab.level === 'C1' ? 'bg-orange-500 text-white' :
+                                'bg-red-500 text-white'
+                              }`}>
+                                {selectedVocab.level}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-700 mt-0.5">{selectedVocab.definition}</p>
+                          <p className="text-sm text-orange-700 mt-0.5 italic">{selectedVocab.definition_vi}</p>
+                          <p className="text-xs text-gray-500 mt-2">
+                            <span className="font-semibold">Location:</span> {selectedVocab.location}
+                          </p>
+                        </>
+                      );
+                    })()}
+                  </div>
+                  <button
+                    onClick={() => setSelectedVocabulary(null)}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <XCircleIcon className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>        
+  {/* Resize Handle 2: Between Passage and Questions */}
+          {!fullscreenColumn && (
+            <div
+              className="hidden lg:flex items-center justify-center w-2 cursor-col-resize bg-gray-200 hover:bg-orange-400 transition-colors relative group"
+              onMouseDown={handleMouseDown('passage-questions')}
+              style={{ userSelect: 'none' }}
+            >
+              <div className="absolute inset-y-0 w-1 bg-orange-600 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+              <div className="absolute top-1/2 -translate-y-1/2 text-gray-500 group-hover:text-orange-700 text-xs font-bold">⋮</div>
+            </div>
+          )}
+
+          {/* Questions - Column 3 */}
+          <div 
+            className={`${fullscreenColumn === 'questions' ? 'fixed inset-0 z-50 overflow-y-auto' : 'hidden lg:block sticky top-24 h-[calc(100vh-140px)] overflow-y-auto overflow-x-hidden'} bg-white rounded-r-xl shadow-lg p-3 pb-12 space-y-1 hide-scrollbar`}
+            style={{ 
+              fontSize: `${fontSizeQuestions}%`,
+              flex: fullscreenColumn ? undefined : `${colWidths.questions} 1 0%`,
+              minWidth: fullscreenColumn ? undefined : '300px'
+            }}
+          >
+            <div className="flex items-center justify-between mb-2 sticky top-0 bg-white pb-1 z-10">
+              <div className="flex items-center gap-2">
+                <LightBulbIcon className="w-6 h-6 text-yellow-600" />
+                <h2 className="text-xl font-bold text-gray-800">Questions</h2>
+                <div className="text-sm text-gray-600">
+                  {currentQuestionIndex + 1} / {allQuestions.length}
+                </div>
+              </div>
+            </div>
+
+            {/* Answer Location Toggle */}
+            <div className="mb-2 flex items-center justify-between p-2 bg-orange-50 rounded-lg border-2 border-orange-300 shadow-sm">
+              <div className="flex items-center gap-2">
+                <MapPinIcon className="w-5 h-5 text-orange-600" />
+                <div>
+                  <span className="text-sm font-bold text-orange-700 block">Định vị đáp án</span>
+                  <span className="text-xs text-orange-600">Bật để highlight vị trí đáp án trong passage</span>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setHighlightAnswer(!highlightAnswer);
+                  if (!highlightAnswer) {
+                    scrollToAnswer();
+                  }
+                }}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  highlightAnswer ? 'bg-orange-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    highlightAnswer ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Question */}
+            <div className="mb-1.5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-orange-600 text-white text-sm font-bold">
+                  {currentQuestion.id}
+                </span>
+                <p className="text-lg font-semibold text-gray-800">
+                  Question {currentQuestion.id}
+                </p>
+              </div>
+              <p className="text-sm text-gray-600 italic">
+                Choose the best option to complete the blank [{currentQuestion.blankNumber}] in the passage.
+              </p>
+            </div>
+
+            {/* Answer Options */}
+            <div className="space-y-3">
+              {currentQuestion.options.map((option, optIdx) => {
+                const isSelected = selectedAnswer === option.value;
+                const isCorrectOption = option.value === currentQuestion.correctAnswer;
+                return (
+                  <button
+                    key={optIdx}
+                    onClick={() => handleAnswerSelect(option.value)}
+                    disabled={gameOver || showReviewMode}
+                    className={`w-full p-4 rounded-lg border-2 text-left transition-all ${
+                      isSelected && isCorrectOption
+                        ? 'bg-green-50 border-green-500 ring-2 ring-green-300'
+                        : isSelected && !isCorrectOption
+                        ? 'bg-red-50 border-red-500 ring-2 ring-red-300'
+                        : isAnswered && isCorrectOption
+                        ? 'bg-green-50 border-green-300'
+                        : 'bg-white border-gray-300 hover:border-orange-400 hover:bg-orange-50'
+                    } ${isAnswered ? 'cursor-default' : 'cursor-pointer'}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className={`font-bold text-lg ${
+                        isSelected && isCorrectOption ? 'text-green-700' :
+                        isSelected && !isCorrectOption ? 'text-red-700' :
+                        isAnswered && isCorrectOption ? 'text-green-600' :
+                        'text-gray-700'
+                      }`}>
+                        {option.value.toUpperCase()}
+                      </span>
+                      <div className="flex-1">
+                        <p className={`font-medium ${
+                          isSelected && isCorrectOption ? 'text-green-800' :
+                          isSelected && !isCorrectOption ? 'text-red-800' :
+                          isAnswered && isCorrectOption ? 'text-green-700' :
+                          'text-gray-800'
+                        }`}>
+                          {option.text}
+                        </p>
+                        {option.text_vi && (
+                          <p className="text-sm text-gray-600 italic mt-0.5">{option.text_vi}</p>
+                        )}
+                      </div>
+                      {isAnswered && (
+                        <>
+                          {isCorrectOption && (
+                            <CheckCircleIcon className="w-6 h-6 text-green-600 flex-shrink-0" />
+                          )}
+                          {isSelected && !isCorrectOption && (
+                            <XCircleIcon className="w-6 h-6 text-red-600 flex-shrink-0" />
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>        
+    {/* Explanation */}
+            {showExplanation && isAnswered && (
+              <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                <p className="text-sm font-semibold text-blue-800 mb-1.5">Giải thích:</p>
+                <p className="text-sm text-blue-700">{currentQuestion.options.find(opt => opt.value === selectedAnswer)?.explanation}</p>
+                {currentQuestion.rule && (
+                  <div className="mt-2 pt-2 border-t border-blue-200">
+                    <p className="text-xs font-semibold text-blue-800 mb-0.5">Quy tắc ngữ pháp:</p>
+                    <p className="text-xs text-blue-600">{currentQuestion.rule}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Navigation */}
+            <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-200">
+              <button
+                onClick={() => setCurrentQuestionIndex(Math.max(0, currentQuestionIndex - 1))}
+                disabled={currentQuestionIndex === 0}
+                className="px-4 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setCurrentQuestionIndex(Math.min(allQuestions.length - 1, currentQuestionIndex + 1))}
+                disabled={currentQuestionIndex === allQuestions.length - 1}
+                className="px-4 py-1 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default TOEICPart6Test2_2019_Card131_134;
