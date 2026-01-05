@@ -1,0 +1,60 @@
+import { PracticeTest } from '../types';
+
+export const defaultPracticeTests: PracticeTest[] = [
+  {
+    id: 'TOEIC-2023-01',
+    title: 'Đề thi thử TOEIC 2023 - số 1',
+    examType: 'TOEIC',
+    durationMinutes: 120,
+    questionCount: 200,
+    isFree: true,
+  },
+  {
+    id: 'IELTS-AC-2023-01',
+    title: 'Đề thi thử IELTS Academic 2023 - số 1',
+    examType: 'IELTS',
+    durationMinutes: 180,
+    questionCount: 80,
+    isFree: true,
+  },
+  {
+    id: 'VSTEP-2023-01',
+    title: 'Đề thi thử VSTEP 2023 - số 1',
+    examType: 'VSTEP',
+    durationMinutes: 160,
+    questionCount: 70,
+    isFree: true,
+  },
+  {
+    id: 'TOEIC-2023-02',
+    title: 'Đề thi thử TOEIC 2023 - số 2',
+    examType: 'TOEIC',
+    durationMinutes: 120,
+    questionCount: 200,
+    isFree: false,
+  },
+  {
+    id: 'IELTS-GT-2023-01',
+    title: 'Đề thi thử IELTS General 2023 - số 1',
+    examType: 'IELTS',
+    durationMinutes: 180,
+    questionCount: 80,
+    isFree: false,
+  },
+   {
+    id: 'VSTEP-2023-02',
+    title: 'Đề thi thử VSTEP 2023 - số 2',
+    examType: 'VSTEP',
+    durationMinutes: 160,
+    questionCount: 70,
+    isFree: false,
+  },
+   {
+    id: 'TOEIC-2024-01',
+    title: 'Đề thi thử TOEIC 2024 - ETS',
+    examType: 'TOEIC',
+    durationMinutes: 120,
+    questionCount: 200,
+    isFree: false,
+  },
+];
